@@ -1,0 +1,250 @@
+{
+  "_readme": "Content OS · Trend source registry. ONE file, many source objects. Each object's 'type' is api | rss | scrape. Add a platform = add one object to 'sources'. NO workflow code for api/rss. Edit in VS Code (validates JSON). Committed to Git, so NEVER put API keys here — use 'auth_ref' to name an n8n credential; the runtime swaps {auth} with the real secret. This file knows NOTHING about pages — page↔source wiring lives in the Supabase 'page_trend_sources' table. Placeholders like {region} in 'url' are filled per-pull from each page's subscription. A different response SHAPE or TIMEFRAME = its own source object, not a placeholder.",
+  "_field_map_help": "field_map keys are OUR standard TrendDetected fields; values are the path inside the platform's response for one item. Target keys: topic (required), description, category, keywords, region, country, language, volume_value, volume_unit, rank, image_url, related, external_id, url, detected_at. 'volume_unit' is a literal — wrap literals as {\"const\": \"searches\"}. Paths use dot notation; for RSS the item is one <item> with tag names as keys (namespaced tags use ht: form).",
+  "_timeframe_help": "timeframe is carried on each source (now | daily | weekly | monthly | yearly). It flows into the TrendDetected event (for the daily Analytics report to group by) AND joins the dedup key, so 'google_trends_daily Dune 3' and 'google_trends_monthly Dune 3' are two different trends. A platform only gets entries for windows it actually supports — no timeframe knob, just separate named sources.",
+  "sources": [
+    {
+      "name": "google_trends_daily",
+      "type": "rss",
+      "enabled": true,
+      "timeframe": "daily",
+      "url": "https://trends.google.com/trending/rss?geo={region}",
+      "auth_ref": null,
+      "defaults": {
+        "region": "TW",
+        "country": "Taiwan",
+        "language": "zh",
+        "category": null
+      },
+      "signal_type": "search_trend",
+      "response_items_path": "rss.channel.item",
+      "field_map": {
+        "topic": "title",
+        "description": "description",
+        "volume_value": "ht:approx_traffic",
+        "volume_unit": {
+          "const": "searches"
+        },
+        "image_url": "ht:picture",
+        "related": "ht:news_item.ht:news_item_title",
+        "url": "link",
+        "external_id": "link",
+        "detected_at": "pubDate"
+      },
+      "notes": "WORKING. Google Trends daily trending searches RSS. No key. {region}=geo (TW,US,JP...)."
+    },
+    {
+      "name": "google_trends_weekly",
+      "type": "rss",
+      "enabled": false,
+      "timeframe": "weekly",
+      "url": "CONFIRM_ENDPOINT — Google has no clean weekly RSS; wire to a 7-day Trends source before enabling",
+      "auth_ref": null,
+      "defaults": {
+        "region": "TW",
+        "country": "Taiwan",
+        "language": "zh",
+        "category": null
+      },
+      "signal_type": "search_trend",
+      "response_items_path": "rss.channel.item",
+      "field_map": {
+        "topic": "title",
+        "description": "description",
+        "volume_value": "ht:approx_traffic",
+        "volume_unit": {
+          "const": "searches"
+        },
+        "image_url": "ht:picture",
+        "related": "ht:news_item.ht:news_item_title",
+        "url": "link",
+        "external_id": "link",
+        "detected_at": "pubDate"
+      },
+      "notes": "SCAFFOLD (disabled). Structure + timeframe ready; needs a real 7-day endpoint confirmed before enabling. Do NOT enable with the daily URL or it silently returns daily data."
+    },
+    {
+      "name": "google_trends_monthly",
+      "type": "rss",
+      "enabled": false,
+      "timeframe": "monthly",
+      "url": "CONFIRM_ENDPOINT — Google has no clean monthly RSS; wire to a 30-day Trends source before enabling",
+      "auth_ref": null,
+      "defaults": {
+        "region": "TW",
+        "country": "Taiwan",
+        "language": "zh",
+        "category": null
+      },
+      "signal_type": "search_trend",
+      "response_items_path": "rss.channel.item",
+      "field_map": {
+        "topic": "title",
+        "description": "description",
+        "volume_value": "ht:approx_traffic",
+        "volume_unit": {
+          "const": "searches"
+        },
+        "image_url": "ht:picture",
+        "related": "ht:news_item.ht:news_item_title",
+        "url": "link",
+        "external_id": "link",
+        "detected_at": "pubDate"
+      },
+      "notes": "SCAFFOLD (disabled). Structure + timeframe ready; needs a real 30-day endpoint confirmed before enabling."
+    },
+    {
+      "name": "youtube",
+      "type": "api",
+      "enabled": true,
+      "timeframe": "now",
+      "url": "https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart={chart}&regionCode={region}&hl={language}&maxResults={max}&key={auth}",
+      "auth_ref": "YouTube API key",
+      "defaults": {
+        "region": "TW",
+        "country": "Taiwan",
+        "language": "zh",
+        "category": null,
+        "chart": "mostPopular",
+        "max": "25"
+      },
+      "signal_type": "trending_rank",
+      "response_items_path": "items",
+      "field_map": {
+        "topic": "snippet.title",
+        "description": "snippet.description",
+        "category": "snippet.categoryId",
+        "keywords": "snippet.tags",
+        "volume_value": "statistics.viewCount",
+        "volume_unit": {
+          "const": "views"
+        },
+        "image_url": "snippet.thumbnails.high.url",
+        "external_id": "id",
+        "url": "id",
+        "detected_at": "snippet.publishedAt"
+      },
+      "notes": "WORKING once key set. YouTube Data API v3 mostPopular (always 'now' — no timeframe siblings). part=snippet,statistics for viewCount(volume)+tags(keywords)+thumbnail. {auth} swapped from n8n credential. rank assigned by list position at parse time."
+    },
+    {
+      "name": "dcard_tw",
+      "type": "scrape",
+      "enabled": false,
+      "timeframe": "daily",
+      "url": "https://www.dcard.tw/service/api/v2/forums/movie/posts?popular=true&limit={max}",
+      "auth_ref": null,
+      "defaults": {
+        "region": "TW",
+        "country": "Taiwan",
+        "language": "zh",
+        "category": "movies",
+        "max": "30"
+      },
+      "signal_type": "post_volume",
+      "response_items_path": "",
+      "field_map": {
+        "topic": "title",
+        "description": "excerpt",
+        "volume_value": "likeCount",
+        "volume_unit": {
+          "const": "likes"
+        },
+        "image_url": "media.0.url",
+        "external_id": "id",
+        "url": "id",
+        "detected_at": "createdAt"
+      },
+      "notes": "SCRAPE type (disabled). The only type that may need code in the Scrape skeleton. field_map points at the extracted item's data."
+    },
+    {
+      "name": "youtube_film",
+      "type": "api",
+      "enabled": true,
+      "timeframe": "now",
+      "url": "https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart=mostPopular&regionCode={region}&hl={language}&maxResults={max}&videoCategoryId=1&key={auth}",
+      "auth_ref": "YouTube API key",
+      "defaults": {
+        "region": "US",
+        "country": "USA",
+        "language": "en",
+        "category": "movies",
+        "chart": "mostPopular",
+        "max": "25"
+      },
+      "signal_type": "trending_rank",
+      "response_items_path": "items",
+      "field_map": {
+        "topic": "snippet.title",
+        "description": "snippet.description",
+        "category": {
+          "const": "movies"
+        },
+        "keywords": "snippet.tags",
+        "volume_value": "statistics.viewCount",
+        "volume_unit": {
+          "const": "views"
+        },
+        "image_url": "snippet.thumbnails.high.url",
+        "external_id": "id",
+        "url": "id",
+        "detected_at": "snippet.publishedAt"
+      },
+      "notes": "WORKING. YouTube Film & Animation category (videoCategoryId=1) = movie/film trends. Region per subscription (US, TW)."
+    }
+  ],
+  "_examples_for_later": {
+    "_comment": "Copy into 'sources' to onboard a platform. Loader ignores keys starting with _.",
+    "youtube_shorts_DIFFERENT_SHAPE": {
+      "name": "youtube_shorts",
+      "type": "api",
+      "enabled": false,
+      "timeframe": "now",
+      "url": "https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart={chart}&regionCode={region}&hl={language}&maxResults={max}&key={auth}",
+      "auth_ref": "YouTube API key",
+      "defaults": {
+        "region": "US",
+        "country": "USA",
+        "language": "en",
+        "chart": "mostPopular",
+        "max": "50"
+      },
+      "signal_type": "trending_rank",
+      "response_items_path": "items",
+      "field_map": {
+        "topic": "snippet.title",
+        "volume_value": "statistics.viewCount",
+        "volume_unit": {
+          "const": "views"
+        },
+        "image_url": "snippet.thumbnails.high.url",
+        "external_id": "id",
+        "detected_at": "snippet.publishedAt"
+      },
+      "notes": "Own entry only because a different shape needs its own field_map. Same-shape variations are page subscriptions, NOT new entries."
+    },
+    "generic_rss": {
+      "name": "some_news_rss",
+      "type": "rss",
+      "enabled": false,
+      "timeframe": "daily",
+      "url": "https://example.com/feed.xml",
+      "auth_ref": null,
+      "defaults": {
+        "region": "TW",
+        "country": "Taiwan",
+        "language": "zh",
+        "category": "news"
+      },
+      "signal_type": "article_trend",
+      "response_items_path": "rss.channel.item",
+      "field_map": {
+        "topic": "title",
+        "description": "description",
+        "url": "link",
+        "external_id": "guid",
+        "detected_at": "pubDate"
+      },
+      "notes": "Any RSS feed = change url + field_map. Usually ZERO code."
+    }
+  }
+}
