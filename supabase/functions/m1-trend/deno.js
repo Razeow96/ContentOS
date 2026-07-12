@@ -1,0 +1,8 @@
+{
+  "imports": {
+    "xml": "https://deno.land/x/xml@2.1.3/mod.ts"
+  },
+  "tasks": {
+    "check": "deno check index.ts"
+  }
+}
