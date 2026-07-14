@@ -1,0 +1,275 @@
+{
+  "_readme": "Content OS · M2 material source catalog. ONE file, many source objects. Each object's 'type' is api | rss | ingest | brightdata. api/rss/brightdata run IN the function; ingest sources are handed in by n8n. Add a source = add one object, redeploy. NEVER put API keys here — use 'auth_ref' to name a Supabase secret env var (brightdata uses the BRIGHTDATA_API_KEY secret automatically). This file knows NOTHING about pages — page wiring lives in the Supabase tables page_material_sources (api), page_reference_sources (reference harvest / brightdata social), page_article_sources (rss/scrape). Placeholders {region} etc. in 'url' are filled per-pull from each page's row.",
+  "_brightdata_readme": "type='brightdata' sources call Bright Data's sync scraper endpoint. dataset_id (gd_...) comes from the Bright Data dashboard /cp/datasets — paste it in (placeholders 'gd_REPLACE_*' error defensively until set). bd_input='prompt' = AI-search scraper (keyword becomes the prompt; no pages needed). bd_input='url' = scrape the ref pages in page_reference_sources matching 'platform' for the selected pages, then keyword-filter. Bright Data is OPT-IN: it only runs when its source name is listed in the request body's 'sources' (keeps default TMDB search fast/free). field_map keys are best-effort — confirm against the first real scrape (the full raw payload is retained regardless).",
+  "_field_map_help": "field_map keys are OUR SourceEnriched fields; values are the path inside the source's response for one item. Target keys: title (required), summary, entities, image_url, media, url, lang, region, country, topic_tags, published_at, engagement, external_id, kind. Wrap literals as {\"const\": \"...\"}. Paths use dot notation. 'image_base' prefixes relative image paths (e.g. TMDB poster_path). 'kind' can also come per-subscription via a page_material_sources param.",
+  "sources": [
+    {
+      "name": "tmdb_movie_list",
+      "type": "api",
+      "enabled": true,
+      "material_type": "movie",
+      "kind": null,
+      "tier": "material",
+      "url": "https://api.themoviedb.org/3/movie/{list}?language={language}&region={region}",
+      "auth_ref": "TMDB API key",
+      "auth_mode": "bearer",
+      "image_base": "https://image.tmdb.org/t/p/w500",
+      "defaults": { "list": "now_playing", "language": "zh-TW", "region": "TW", "kind": "now_playing" },
+      "response_items_path": "results",
+      "field_map": {
+        "title": "title",
+        "summary": "overview",
+        "external_id": "id",
+        "image_url": "poster_path",
+        "published_at": "release_date"
+      },
+      "notes": "RAZ-23 shadow of Workflow A. {list} = now_playing | upcoming | top_rated (same movie shape). Page rows set params {list, kind(=list), language, region}. Workflow A pulls zh-TW/TW + en-US/US = two page_material_sources rows per list. Auth = TMDB v4 read token (Bearer), Supabase secret TMDB_API_KEY."
+    },
+    {
+      "name": "tmdb_trending",
+      "type": "api",
+      "enabled": true,
+      "material_type": "movie",
+      "kind": "trending",
+      "tier": "material",
+      "url": "https://api.themoviedb.org/3/trending/movie/{window}?language={language}&region={region}",
+      "auth_ref": "TMDB API key",
+      "auth_mode": "bearer",
+      "image_base": "https://image.tmdb.org/t/p/w500",
+      "defaults": { "window": "week", "language": "zh-TW", "region": "TW" },
+      "response_items_path": "results",
+      "field_map": {
+        "title": "title",
+        "summary": "overview",
+        "external_id": "id",
+        "image_url": "poster_path",
+        "published_at": "release_date"
+      },
+      "notes": "RAZ-23 shadow of Workflow A trending/movie/week. region optional (Workflow A's en-US pull omits it — leave region blank in that page row)."
+    },
+    {
+      "name": "tmdb_search",
+      "type": "api",
+      "enabled": true,
+      "search": true,
+      "material_type": "movie",
+      "kind": "search",
+      "tier": "material",
+      "url": "https://api.themoviedb.org/3/search/movie?query={query}&language={language}&include_adult=false",
+      "auth_ref": "TMDB API key",
+      "auth_mode": "bearer",
+      "image_base": "https://image.tmdb.org/t/p/w500",
+      "defaults": { "language": "zh-TW", "query": "" },
+      "response_items_path": "results",
+      "field_map": {
+        "title": "title",
+        "summary": "overview",
+        "external_id": "id",
+        "image_url": "poster_path",
+        "published_at": "release_date"
+      },
+      "notes": "Keyword search source (RAZ-26 autonomous trend enrichment + RAZ-37 manual tool). {query} = trend topic or manual keyword, URL-encoded by fillUrl. search:true marks it usable by the search mode."
+    },
+    {
+      "name": "tmdb_watch_providers",
+      "type": "api",
+      "enabled": false,
+      "material_type": "listing",
+      "kind": "provider",
+      "tier": "material",
+      "url": "https://api.themoviedb.org/3/movie/{movie_id}/watch/providers",
+      "auth_ref": "TMDB API key",
+      "auth_mode": "bearer",
+      "defaults": { "movie_id": "" },
+      "response_items_path": "results",
+      "field_map": {
+        "title": {"const": "watch_providers"},
+        "external_id": "id"
+      },
+      "notes": "SCAFFOLD (disabled). RAZ-24 flexible listings adapter — kinds: provider | now_showing | upcoming | ... watch/providers is PER-MOVIE (needs {movie_id}) and returns results keyed by country (not an array) — wire it as trend/movie-driven enrichment (needs the RAZ-26 routing), not a standalone list."
+    },
+    {
+      "name": "article_rss",
+      "type": "rss",
+      "enabled": false,
+      "material_type": "article",
+      "kind": null,
+      "tier": "material",
+      "url": "{feed_url}",
+      "auth_ref": null,
+      "defaults": {},
+      "response_items_path": "rss.channel.item",
+      "field_map": {
+        "title": "title",
+        "summary": "description",
+        "url": "link",
+        "external_id": "guid",
+        "published_at": "pubDate"
+      },
+      "notes": "SCAFFOLD (disabled). RAZ-25 wires page_article_sources (mode=rss) so {feed_url} is filled per row. Scrape-mode articles arrive via the ingest path (source=article_scrape)."
+    },
+    {
+      "name": "reference_harvest",
+      "type": "ingest",
+      "enabled": true,
+      "material_type": "reference_post",
+      "kind": null,
+      "tier": "inspiration",
+      "url": "",
+      "auth_ref": null,
+      "defaults": {},
+      "response_items_path": "",
+      "field_map": {
+        "title": "page_name",
+        "summary": "content",
+        "external_id": "post_id",
+        "image_url": "media.0.url",
+        "url": "url",
+        "published_at": "date_posted",
+        "engagement": "engagement"
+      },
+      "notes": "INGEST source (RAZ-36). n8n runs Bright Data, then POSTs {mode:'ingest', source:'reference_harvest', pages:[...], items:[...raw posts...]}. n8n pre-shapes each post's 'engagement' object {likes,comments,shares}. tier=inspiration = reference ONLY, never verbatim (contract guardrail)."
+    },
+
+    {
+      "name": "bd_perplexity", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_perplexity", "bd_input": "prompt",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "response_id" },
+      "notes": "AI-search: Bright Data Perplexity scraper. keyword -> prompt. Opt-in via body.sources=['bd_perplexity']. Paste dataset_id."
+    },
+    {
+      "name": "bd_chatgpt", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_chatgpt", "bd_input": "prompt",
+      "bd_params": { "web_search": true },
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "response_id" },
+      "notes": "AI-search: Bright Data ChatGPT scraper. bd_params.web_search=true enables live web search. Opt-in. Paste dataset_id."
+    },
+    {
+      "name": "bd_gemini", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_gemini", "bd_input": "prompt",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "response_id" },
+      "notes": "AI-search: Bright Data Gemini scraper. No web_search control (per docs). Opt-in. Paste dataset_id."
+    },
+    {
+      "name": "bd_google_ai", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_google_ai", "bd_input": "prompt",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "response_id" },
+      "notes": "AI-search: Bright Data Google AI Mode scraper. Opt-in. Paste dataset_id."
+    },
+    {
+      "name": "bd_copilot", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_copilot", "bd_input": "prompt",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "response_id" },
+      "notes": "AI-search: Bright Data Copilot scraper. Opt-in. Paste dataset_id."
+    },
+
+    {
+      "name": "bd_facebook", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lkaxegm826bjpoo9m5", "bd_input": "url", "platform": "facebook",
+      "bd_params": { "num_of_posts": 10 },
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "page_name", "summary": "content", "external_id": "post_id", "image_url": "post_external_image", "url": "url", "published_at": "date_posted", "engagement": { "likes": "likes", "comments": "num_comments", "shares": "num_shares" } },
+      "notes": "Social: Bright Data 'Facebook - Pages Posts by Profile URL - collect by URL' (dataset gd_lkaxegm826bjpoo9m5). bd_input=url scrapes page_reference_sources rows (platform=facebook) for the selected pages; num_of_posts=10 recent posts each; keyword relevance via AI-assist. field_map VERIFIED against real output 2026-07-14 (title=page_name, summary=content, engagement=composite likes/num_comments/num_shares). Note: header_image is the page cover (not per-post); post images only in post_external_image when present."
+    },
+    {
+      "name": "bd_instagram", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_instagram", "bd_input": "url", "platform": "instagram",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "user_posted", "summary": "caption", "external_id": "post_id", "image_url": "display_url", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
+      "notes": "Social: Bright Data Instagram posts. Opt-in. Paste dataset_id; confirm field_map vs real output."
+    },
+    {
+      "name": "bd_x", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_x", "bd_input": "url", "platform": "x",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "user_posted", "summary": "description", "external_id": "id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
+      "notes": "Social: Bright Data X/Twitter posts. Opt-in. Paste dataset_id; confirm field_map vs real output."
+    },
+    {
+      "name": "bd_tiktok", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_tiktok", "bd_input": "url", "platform": "tiktok",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "profile_username", "summary": "description", "external_id": "post_id", "image_url": "preview_image", "url": "url", "published_at": "create_time", "engagement": "engagement" },
+      "notes": "Social: Bright Data TikTok posts. Opt-in. Paste dataset_id; confirm field_map vs real output."
+    },
+    {
+      "name": "bd_youtube", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_youtube", "bd_input": "url", "platform": "youtube",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "title", "summary": "description", "external_id": "video_id", "image_url": "thumbnail", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
+      "notes": "Social: Bright Data YouTube videos. Opt-in. Paste dataset_id; confirm field_map vs real output."
+    },
+    {
+      "name": "bd_linkedin", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_linkedin", "bd_input": "url", "platform": "linkedin",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "user_id", "summary": "post_text", "external_id": "post_id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
+      "notes": "Social: Bright Data LinkedIn posts. Opt-in. Paste dataset_id; confirm field_map vs real output."
+    },
+    {
+      "name": "bd_reddit", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_reddit", "bd_input": "url", "platform": "reddit",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "title", "summary": "description", "external_id": "post_id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
+      "notes": "Social: Bright Data Reddit posts. Opt-in. Paste dataset_id; confirm field_map vs real output."
+    },
+    {
+      "name": "bd_pinterest", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_pinterest", "bd_input": "url", "platform": "pinterest",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "user_name", "summary": "description", "external_id": "post_id", "image_url": "image_url", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
+      "notes": "Social: Bright Data Pinterest pins. Opt-in. Paste dataset_id; confirm field_map vs real output."
+    },
+    {
+      "name": "bd_quora", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_quora", "bd_input": "url", "platform": "quora",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "title", "summary": "content", "external_id": "post_id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
+      "notes": "Social: Bright Data Quora. Opt-in. Paste dataset_id; confirm field_map vs real output."
+    },
+
+    {
+      "name": "bd_snapchat", "type": "brightdata", "enabled": false, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_snapchat", "bd_input": "url", "platform": "snapchat",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "user_name", "summary": "content", "external_id": "post_id", "url": "url", "published_at": "date_posted" },
+      "notes": "UNVERIFIED (disabled): confirm Bright Data offers a Snapchat scraper in /cp/datasets before enabling. Snapchat is the least likely to exist."
+    },
+    {
+      "name": "bd_vimeo", "type": "brightdata", "enabled": false, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_vimeo", "bd_input": "url", "platform": "vimeo",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "title", "summary": "description", "external_id": "video_id", "url": "url", "published_at": "date_posted" },
+      "notes": "UNVERIFIED (disabled): confirm Bright Data offers a Vimeo scraper before enabling."
+    },
+    {
+      "name": "bd_threads", "type": "brightdata", "enabled": false, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_threads", "bd_input": "url", "platform": "threads",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "user_posted", "summary": "content", "external_id": "post_id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
+      "notes": "UNVERIFIED (disabled): confirm Bright Data offers a Threads scraper before enabling."
+    }
+  ]
+}

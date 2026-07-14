@@ -1,0 +1,58 @@
+# Content OS — DDD & Architecture Principles
+
+These are binding rules for how Content OS is built. They come from ADR-001 (Linear). If a request conflicts with these, follow the rule and say so.
+
+## Core stance
+Content OS is a **domain-driven, event-driven** system. 10 domains, each a bounded context. We are migrating OFF 3 legacy n8n workflows using the **strangler pattern** — carve out one domain at a time, never break what's live.
+
+## The 10 domains
+Trend Intelligence · Content Sources · Content Generation · Media Production · Publishing · Analytics · Learning · Page Management · Scheduling · Infrastructure.
+
+## Non-negotiable invariants
+1. **One aggregate = one domain = one append-only SQL stream table** (e.g. `trend_events`, `source_events`). One writer per stream.
+2. **Domains communicate ONLY through events.** A domain NEVER reads or writes another domain's tables. If you need another domain's data, react to its event — don't query its tables.
+3. **Push delivery, event-based.** A Supabase Database Webhook fires on INSERT into a stream table and POSTs to the subscriber. No polling/cursors.
+4. **Fat, self-contained events.** The event payload carries everything a subscriber needs, so subscribers never call back into the source domain.
+5. **Idempotent consumers.** Every subscriber dedups on `event_id` (a "seen log"), because delivery is at-least-once.
+6. **Correlation & causation.** `correlation_id` is minted at the head of a flow and copied to every downstream event; `causation_id` = the event that caused this one. This is how a flow is traced across domains.
+7. **Contract-first.** Every event type has a versioned contract (Linear doc) approved BEFORE its code is built. Additive change = bump schema_version; breaking change = new event_type (e.g. TrendDetectedV2).
+
+## Logic placement
+- **n8n is an orchestrator, not a logic engine.** Use it for scheduling, triggering, and status reporting only.
+- **Real logic lives in real code** — Supabase Edge Functions (Deno/TS). If a workflow is becoming many code-nodes, that's a smell: move the logic into a function.
+- **Config is data, not code.** Platform/catalog config lives in JSON files (edited in VS Code) or SQL tables — never hardcoded in logic. The code READS config; it doesn't CONTAIN it.
+
+## Aggregate vs reactor
+Not every domain owns state. An **aggregate** owns tables + enforces invariants (e.g. Trend owns dedup/freshness). A **reactor** is stateless: event-in → transform → event-out (e.g. Media Production). Decide which before building; getting it wrong creates a distributed monolith.
+
+## Migration safety (strangler)
+- Legacy workflows A (Chinese Movie Generator), B (Poster), C (Daily Report) STAY LIVE and untouched except explicit, logged patches.
+- New domains run in **shadow mode** (emit real events alongside prod) before any cutover.
+- Build **per feature, per day** — every feature independently shippable and reversible. No big-bang.
+- `content_queue` becomes a projection fed by events; Workflow B becomes the Publishing domain.
+
+## Definition of done (every feature)
+Migration applied · events flowing · consumers idempotent · contract + docs updated · artifacts committed to GitHub · legacy A/B/C unaffected.
+
+## Volume / cross-source rule (learned)
+Signals from different platforms are never merged and never volume-compared (views ≠ searches ≠ likes). Store raw {value, unit, source}; relative "hotness" is a later Analytics/Learning job.
+
+# Working with Raze — Persona & Communication Rules
+
+## Who Raze is
+Founder and **system architect** of Content OS. Understands DDD, event-driven design, and infrastructure topology at a systems level. **Does NOT write code.** Communicates architecture and intent; relies on the AI to produce the actual code.
+
+### When code is involved (SQL, JSON, TypeScript, n8n expressions, shell)
+- **Always give a complete, ready-to-copy-paste block.** No fragments, no "add a line here."
+- **Do NOT explain where to click or how to use the tools.** He knows n8n, Supabase, VS Code, SQL editors, Git. Skip all UI/navigation hand-holding.
+- **DO give exact technical instructions when a sequence matters** — e.g. "edit file → `supabase functions deploy m1-trend` → invoke", or the precise order of SQL statements. He needs the *what and the order*, not the *where*.
+- If a value must be filled in (page_id, key), mark it clearly (e.g. `YOUR_US_PAGE`) rather than guessing.
+
+### When explaining
+- Explain at **systems level** — the why, the tradeoff, the architecture impact. Not line-by-line code walkthroughs unless asked.
+- Be concise. He moves fast and dislikes over-explanation.
+- Surface real constraints and honest limitations plainly (e.g. "Google RSS can't filter by category"). Don't paper over them.
+
+## Build philosophy
+- **Lean and fast.** Blitz-build; accept a feature once the logic is sound; move on. Debug/maintain only when a real problem surfaces. Do NOT push for exhaustive edge-case testing or belabored verification.
+- Don't over-engineer. Smallest correct change. No speculative folders, abstractions, or features not asked for.
