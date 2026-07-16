@@ -1,7 +1,7 @@
 {
   "_readme": "Content OS · M2 material source catalog. ONE file, many source objects. Each object's 'type' is api | rss | ingest | brightdata. api/rss/brightdata run IN the function; ingest sources are handed in by n8n. Add a source = add one object, redeploy. NEVER put API keys here — use 'auth_ref' to name a Supabase secret env var (brightdata uses the BRIGHTDATA_API_KEY secret automatically). This file knows NOTHING about pages — page wiring lives in the Supabase tables page_material_sources (api), page_reference_sources (reference harvest / brightdata social), page_article_sources (rss/scrape). Placeholders {region} etc. in 'url' are filled per-pull from each page's row.",
   "_brightdata_readme": "type='brightdata' sources call Bright Data's sync scraper endpoint. dataset_id (gd_...) comes from the Bright Data dashboard /cp/datasets — paste it in (placeholders 'gd_REPLACE_*' error defensively until set). bd_input='prompt' = AI-search scraper (keyword becomes the prompt; bd_url = the chat surface the scraper drives, a REQUIRED input alongside prompt). bd_input='url' = scrape the ref pages in page_reference_sources matching 'platform' for the selected pages, then keyword-filter. Bright Data is OPT-IN: it only runs when its source name is listed in the request body's 'sources' (keeps default TMDB search fast/free). field_map keys are best-effort — confirm against the first real scrape (the full raw payload is retained regardless).",
-  "_brightdata_collect_vs_discover": "CRITICAL (learned 2026-07-16): one gd_ dataset = one scraper GROUP (e.g. 'Instagram - Posts'), and each group exposes 'collect by URL' (you hand it exact item URLs — a tweet, a video, a pin) AND 'discover by ...' (you hand it a seed like a profile/channel and it FINDS the items). Same dataset_id; the mode is a query param on the call: &type=discover_new&discover_by=<method>. Our model is profile-URL -> that page's recent posts, which is DISCOVER for every platform except Facebook — 'Facebook - Pages Posts by Profile URL' is natively profile->posts in collect mode, which is why it worked first try and set a misleading precedent. So a bd_* social entry needs the dataset_id of the POSTS group (not the Profiles group) plus bd_discover_by. The bd_discover_by values below are read off the dashboard's endpoint labels — confirm each against Bright Data's API docs on first real run (RAZ-36). The in-function sync path never uses these (social is async-only); the n8n harvest workflow does.",
+  "_brightdata_collect_vs_discover": "CRITICAL (learned 2026-07-16): one gd_ dataset = one scraper GROUP (e.g. 'Instagram - Posts'), and each group exposes 'collect by URL' (you hand it exact item URLs — a tweet, a video, a pin) AND 'discover by ...' (you hand it a seed like a profile/channel and it FINDS the items). Same dataset_id; the mode is a query param on the call: &type=discover_new&discover_by=<method>. Our model is profile-URL -> that page's recent posts, which is DISCOVER for every platform except Facebook — 'Facebook - Pages Posts by Profile URL' is natively profile->posts in collect mode, which is why it worked first try and set a misleading precedent. So a bd_* social entry needs the dataset_id of the POSTS group (not the Profiles group) plus bd_discover_by. The bd_discover_by values below are read off each group's own endpoint list — tiktok/linkedin/instagram are confirmed against the dashboard; the rest still want a check against Bright Data's API docs on first real run (RAZ-36). The in-function sync path never uses these (social is async-only); the n8n harvest workflow does.",
   "_external_id_help": "external_id feeds the dedup grain (source, external_id, window_day) — dedup.ts builds its key as source|external_id, so a field_map path that does NOT exist in the real payload silently yields ONE shared key per source per day, and everything after the first item is dropped as a duplicate on the sink='events' path. Verified 2026-07-16: the AI scrapers return no 'response_id' (real keys: prompt, answer_text, url, citations, sources, timestamp, index), so all five map external_id -> prompt = one answer per keyword per day, which is the grain we want. Always confirm external_id resolves against a real payload before trusting a source on the events path.",
   "_field_map_help": "field_map keys are OUR SourceEnriched fields; values are the path inside the source's response for one item. Target keys: title (required), summary, entities, image_url, media, url, lang, region, country, topic_tags, published_at, engagement, external_id, kind. Wrap literals as {\"const\": \"...\"}. Paths use dot notation. 'image_base' prefixes relative image paths (e.g. TMDB poster_path). 'kind' can also come per-subscription via a page_material_sources param.",
   "sources": [
@@ -164,11 +164,11 @@
     {
       "name": "bd_google_ai", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_google_ai", "bd_input": "prompt",
-      "bd_url": "https://www.google.com/",
+      "url": "", "auth_ref": null, "dataset_id": "gd_mcswdt6z2elth3zqr2", "bd_input": "prompt",
+      "bd_url": "https://google.com/aimode",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "prompt" },
-      "notes": "AI-search: Bright Data Google AI Mode. STILL NEEDS dataset_id — the 2026-07-16 screenshot (google.png) captured 'Google Maps full information' (gd_m8ebnr0q2qlklc02fz), a different scraper we do not want. Re-screenshot the 'Google AI Mode Search' endpoint in google.com's sidebar. Errors defensively until pasted."
+      "notes": "AI-search: Bright Data 'Google AI Mode Search - collect by URL' (dataset gd_mcswdt6z2elth3zqr2, wired 2026-07-16). Declared inputs: url(req, https://google.com/aimode) + prompt(req) + country, hl (interface language, e.g. 'en' — add via bd_params if a non-English answer is ever wanted). Opt-in."
     },
     {
       "name": "bd_copilot", "type": "brightdata", "enabled": true, "search": true,
@@ -192,11 +192,11 @@
     {
       "name": "bd_instagram", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_instagram", "bd_input": "url", "platform": "instagram",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lk5ns7kz21pck8jpis", "bd_input": "url", "platform": "instagram",
       "bd_discover_by": "url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "user_posted", "summary": "caption", "external_id": "post_id", "image_url": "display_url", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social: Bright Data Instagram posts. STILL NEEDS dataset_id — the 2026-07-16 screenshot (instagram.png) captured the 'Instagram - Profiles' group (gd_l1vikfch901nx3by4), which returns profile metadata, not posts. Re-screenshot the 'Instagram - Posts' group (its 'Discover by url' endpoint). Errors defensively until pasted."
+      "notes": "Social: Bright Data 'Instagram - Posts' (dataset gd_lk5ns7kz21pck8jpis, wired 2026-07-16 from instagramurl.png). Use discover_by=url so a profile ref_url yields its posts — 'Discover by url' is the only discover mode this group offers (collect mode wants individual /p/ URLs). Opt-in. Confirm field_map vs real output."
     },
     {
       "name": "bd_x", "type": "brightdata", "enabled": true, "search": true,
@@ -210,11 +210,11 @@
     {
       "name": "bd_tiktok", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_tiktok", "bd_input": "url", "platform": "tiktok",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lu702nij2f790tmv9h", "bd_input": "url", "platform": "tiktok",
       "bd_discover_by": "profile_url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "profile_username", "summary": "description", "external_id": "post_id", "image_url": "preview_image", "url": "url", "published_at": "create_time", "engagement": "engagement" },
-      "notes": "Social: Bright Data TikTok posts. STILL NEEDS dataset_id — the 2026-07-16 screenshot (titok.png) captured the 'TikTok - Profiles' group (gd_l1villgoiiidt09ci), not posts. Re-screenshot 'TikTok - Posts' (or 'TikTok - Posts by Profile Fast API', which is natively profile->posts and may suit us better). Errors defensively until pasted."
+      "notes": "Social: Bright Data 'TikTok - Posts' (dataset gd_lu702nij2f790tmv9h, wired 2026-07-16 from tiktokurl.png). discover_by=profile_url CONFIRMED against the group's own endpoint list (collect/keyword/profile_url/url). Opt-in. Confirm field_map vs real output."
     },
     {
       "name": "bd_youtube", "type": "brightdata", "enabled": true, "search": true,
@@ -228,11 +228,11 @@
     {
       "name": "bd_linkedin", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_linkedin", "bd_input": "url", "platform": "linkedin",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lyy3tktm25m4avu764", "bd_input": "url", "platform": "linkedin",
       "bd_discover_by": "profile_url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "user_id", "summary": "post_text", "external_id": "post_id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social: Bright Data LinkedIn posts. STILL NEEDS dataset_id — the 2026-07-16 screenshot (linkedin.png) captured the 'LinkedIn people profiles' group (gd_l1viktl72bvl7bjuj0), not posts. Re-screenshot the 'LinkedIn posts' group. Errors defensively until pasted."
+      "notes": "Social: Bright Data 'LinkedIn posts' (dataset gd_lyy3tktm25m4avu764, wired 2026-07-16 from linkedinurl.png). discover_by=profile_url CONFIRMED against the group's own endpoint list (collect/company_url/profile_url/url); use discover_by=company_url instead if a ref_url is a company page rather than a person. Opt-in. Confirm field_map vs real output."
     },
     {
       "name": "bd_reddit", "type": "brightdata", "enabled": true, "search": true,
