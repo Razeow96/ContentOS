@@ -119,8 +119,8 @@
       "url": "", "auth_ref": null, "dataset_id": "gd_lk5ns7kz21pck8jpis", "bd_input": "url", "platform": "instagram",
       "bd_discover_by": "url",
       "defaults": {}, "response_items_path": "",
-      "field_map": { "title": "user_posted", "summary": "caption", "external_id": "post_id", "image_url": "display_url", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social. 'Discover by url' is this group's ONLY discover mode. field_map unverified."
+      "field_map": { "title": "description", "summary": "description", "kind": "content_type", "external_id": "post_id", "image_url": "thumbnail", "media": "videos", "url": "url", "published_at": "date_posted", "engagement": { "likes": "likes", "comments": "num_comments" } },
+      "notes": "Social. discover_by=url PROVEN live 2026-07-16 (10 posts) — it is this group's ONLY discover mode. field_map CORRECTED against real records: summary was 'caption' and image_url was 'display_url' — NEITHER key exists (both 0/10); the caption is 'description' and the image is 'thumbnail'. title was user_posted (the author) -> now description. kind=content_type. No shares metric on IG. TWO CAVEATS: (1) discover_by=url returns posts APPEARING ON the profile incl. collabs/paid partnerships — for interstellarmovie only 2/10 were actually authored by it (rest were paramountpics etc. with coauthor_producers=interstellarmovie). Instagram collabs legitimately appear on both grids, but 'reference page' means something looser here than on Facebook. (2) All 10 came back content_type=Reel; discovery_input exposes a post_type param we do not set — likely why no photo posts. Set it via bd_params if photo posts are wanted."
     },
     {
       "name": "bd_x", "type": "brightdata", "enabled": true, "search": true,
@@ -128,8 +128,8 @@
       "url": "", "auth_ref": null, "dataset_id": "gd_lwxkxvnf1cynvib9co", "bd_input": "url", "platform": "x",
       "bd_discover_by": "profile_url",
       "defaults": {}, "response_items_path": "",
-      "field_map": { "title": "user_posted", "summary": "description", "external_id": "id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social. discover_by label-inferred — confirm on first run. field_map unverified."
+      "field_map": { "title": "description", "summary": "description", "external_id": "id", "image_url": "photos.0", "media": "photos", "url": "url", "published_at": "date_posted", "topic_tags": "hashtags", "engagement": { "likes": "likes", "comments": "replies", "shares": "reposts" } },
+      "notes": "Social. discover_by=profile_url PROVEN live 2026-07-16 (10 tweets). field_map CORRECTED against real records: title was user_posted = the handle, identical on every tweet -> now description (the tweet text; X has no title). There is NO 'engagement' object — the counts are flat (likes/replies/reposts/quotes/views/bookmarks). views + bookmarks are deliberately EXCLUDED: engagement is summed for best_performing and views dwarf likes (same reason as Facebook play_count). image_url=photos.0 fills 2/10 — real, most tweets are text-only. hashtags path exists but was 0/10 on this account: UNVERIFIED."
     },
     {
       "name": "bd_tiktok", "type": "brightdata", "enabled": true, "search": true,

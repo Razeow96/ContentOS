@@ -220,7 +220,28 @@ async function run(body: RunBody) {
 
 Deno.serve(async (req) => {
   try {
-    const body: RunBody = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+    // A body that fails to parse must NOT fall through to mode="run": that default
+    // pulls every subscribed API source and writes real events, so a malformed
+    // request silently performed a full TMDB pull instead of erroring (caught
+    // 2026-07-16 — it wrote 40 junk events). Bad input fails loudly now.
+    let body: RunBody = {};
+    if (req.method === "POST") {
+      const text = await req.text();
+      if (text.trim() !== "") {
+        try {
+          body = JSON.parse(text);
+        } catch (e) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: `Body is not valid JSON: ${(e as Error).message}`,
+              bytes_received: text.length,
+            }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          );
+        }
+      }
+    }
     const result = await run(body);
     return new Response(JSON.stringify(result, null, 2), {
       status: result.ok ? 200 : 207,
