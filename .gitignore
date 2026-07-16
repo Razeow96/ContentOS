@@ -3,3 +3,7 @@
 # panel renders the live BRIGHTDATA_API_KEY as a Bearer token.
 m2dbidconfiguration/
 fb1.png
+
+# AR-1 admin UI local config — holds the Supabase service_role key, which bypasses
+# RLS. config.example.js is the committed template.
+admin/config.js

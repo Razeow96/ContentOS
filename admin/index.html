@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Content OS · Admin</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside class="nav">
+    <div class="brand">Content&nbsp;OS<span>admin · config plane</span></div>
+    <button class="navitem active" data-screen="trend">Trend</button>
+    <button class="navitem" data-screen="source">Content Source</button>
+    <div class="navfoot">
+      <div id="conn" class="conn">connecting…</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="banner" class="banner hidden"></div>
+    <div id="screen"></div>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
