@@ -20,7 +20,7 @@ note : treat linear as software documentation and project management including s
 - Two bug signatures: field 0/N populated = key doesn't exist. Field 1-distinct across N = you mapped a page/parent-level field.
 - Only write "VERIFIED" in notes with the date + sample size you actually read. Never generalise from a null.
 
-## API rate-limit gate (learned 2026-07-16 — the 5,000-credit burn)
+## API rate-limit gate
 - EVERY outbound API call, any platform, passes through the rate-limit setup BEFORE it is configured or fired. No direct raw calls from adapters or n8n.
 - Limits are budgets, not just req/sec: paid APIs bill per RECORD — a per-provider daily record/credit budget is what would have saved the trial.
 - A job still running at timeout = the job spec is unbounded, not a slow platform. Diagnose the spec; never re-fire with a longer window.
