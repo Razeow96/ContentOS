@@ -155,8 +155,8 @@
       "url": "", "auth_ref": null, "dataset_id": "gd_lyy3tktm25m4avu764", "bd_input": "url", "platform": "linkedin",
       "bd_discover_by": "company_url",
       "defaults": {}, "response_items_path": "",
-      "field_map": { "title": "user_id", "summary": "post_text", "external_id": "post_id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social. discover_by CONFIRMED vs dashboard; use company_url instead when a ref_url is a company page, not a person. field_map unverified."
+      "field_map": { "title": "post_text", "summary": "post_text", "kind": "post_type", "external_id": "id", "image_url": "video_thumbnail", "url": "url", "published_at": "date_posted", "topic_tags": "hashtags", "media": "videos", "engagement": { "likes": "num_likes", "comments": "num_comments" } },
+      "notes": "Social. discover_by=company_url PROVEN live 2026-07-16 (netflix). field_map CORRECTED against a real record: external_id was post_id — NO SUCH KEY (0/N, dedup-breaking); the id is 'id'. title was user_id (the account) -> post_text. No 'engagement' object; flat -> {likes:num_likes, comments:num_comments} (no share count on LinkedIn). kind=post_type, topic_tags=hashtags. image_url=video_thumbnail works for VIDEO posts; image-only posts populate 'images' (array) and leave video_thumbnail null — single-path limitation, UNVERIFIED for image posts."
     },
     {
       "name": "bd_reddit", "type": "brightdata", "enabled": true, "search": true,
