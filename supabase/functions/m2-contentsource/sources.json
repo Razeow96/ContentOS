@@ -195,14 +195,14 @@
       "notes": "Social. discover_by=profile PROVEN live 2026-07-16 (netflix, 28 records / 34 dead_page errors — spotlight scraping is lossy). field_map CORRECTED against real records: title AND summary were user_name/content — NEITHER KEY EXISTS, so every record was dropped for having no title (pulled=0). Caption is 'description'. published_at was date_posted -> upload_date (no date_posted key). kind='title' (Snapchat's generic post-type label, e.g. 'Spotlight Snap'). image=thumbnail_url, media=video_url, topic_tags=hashtags. Engagement flat {num_comments,num_shares}; no likes on Snapchat; num_views excluded (views rule)."
     },
     {
-      "name": "bd_vimeo", "type": "brightdata", "enabled": true, "search": true,
+      "name": "bd_vimeo", "type": "brightdata", "enabled": false, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
       "url": "", "auth_ref": null, "dataset_id": "gd_lxk88z3v1ketji4pn", "bd_input": "url", "platform": "vimeo",
       "bd_discover_by": "url",
       "bd_params": { "keyword": "", "pages": 1 },
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "title", "summary": "description", "external_id": "video_id", "url": "url", "published_at": "date_posted" },
-      "notes": "Social. RE-ENABLED 2026-07-16 (vimeo2.png): 'Discover by url' DOES take channel URLs, but its input schema is url + keyword + pages — the earlier 400 came from sending url alone. bd_params supplies keyword:'' + pages:1. Confirm which channel-URL form BD accepts on first run. field_map unverified — audit on first run."
+      "notes": "ABANDONED (owner call, 2026-07-16). Discover-by-url schema is url+keyword+pages (vimeo2.png), but BD's validation rejected every channel/user URL form tried (/channels/staffpicks, /dust) on 'url'. Low-value platform, not worth more credits. Ref row disabled; do not re-enable."
     },
     {
       "name": "bd_threads", "type": "brightdata", "enabled": false, "search": true,
