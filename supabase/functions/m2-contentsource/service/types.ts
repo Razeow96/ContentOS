@@ -22,6 +22,8 @@ export interface MaterialSource {
   dataset_id?: string;               // gd_... scraper id from the Bright Data dashboard
   platform?: string;                 // for bd_input="url": matches page_reference_sources.platform
   bd_input?: "prompt" | "url";       // "prompt" = AI scraper (keyword→answer); "url" = scrape ref pages
+  bd_url?: string;                   // bd_input="prompt": the scraper's required chat-surface url
+  bd_discover_by?: string;           // bd_input="url": discover mode (profile_url|url|...); omit = collect-by-URL
   bd_params?: Record<string, unknown>; // extra fields merged into each Bright Data input row
   defaults: Record<string, string | null>;
   response_items_path: string;       // dot-path to the array of items ("" = response is the array)

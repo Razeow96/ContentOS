@@ -1,0 +1,5 @@
+# Bright Data scraper screenshots. Kept locally as the source of truth for
+# dataset_ids + field_maps, never committed: every screenshot's "Code examples"
+# panel renders the live BRIGHTDATA_API_KEY as a Bearer token.
+m2dbidconfiguration/
+fb1.png

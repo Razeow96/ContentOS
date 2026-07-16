@@ -64,8 +64,11 @@ async function buildInputs(
   }
 
   // bd_input="prompt" (default): AI-search scrapers — one row, the keyword as prompt.
+  // Every AI scraper also declares `url` Required (the chat surface it drives, e.g.
+  // https://www.perplexity.ai) — omitting it fails the scrape, so bd_url is mandatory.
   if (!keyword) return [];
-  return [{ prompt: keyword, ...extra }];
+  if (!src.bd_url) throw new Error(`${src.name}: bd_input=prompt needs bd_url`);
+  return [{ url: src.bd_url, prompt: keyword, ...extra }];
 }
 
 // Async fallback: poll a snapshot to completion, then download its records.
@@ -108,11 +111,16 @@ export async function pullBrightData(
   if (inputs.length === 0) return []; // nothing to scrape (e.g. no ref pages for this platform)
 
   const deadline = Date.now() + TIMEOUT_MS;
-  const res = await fetch(`${BD_BASE}/scrape?dataset_id=${encodeURIComponent(src.dataset_id)}&format=json`, {
-    method: "POST",
-    headers: { ...auth(brightKey), "Content-Type": "application/json" },
-    body: JSON.stringify(inputs),
-  });
+  // Body envelope is {"input":[...]} — the bare array the /trigger endpoint takes is
+  // NOT what /scrape expects (confirmed against every scraper's own code example).
+  const res = await fetch(
+    `${BD_BASE}/scrape?dataset_id=${encodeURIComponent(src.dataset_id)}&format=json&notify=false&include_errors=true`,
+    {
+      method: "POST",
+      headers: { ...auth(brightKey), "Content-Type": "application/json" },
+      body: JSON.stringify({ input: inputs }),
+    },
+  );
   if (!res.ok) throw new Error(`Bright Data ${src.name} ${res.status}: ${(await res.text()).slice(0, 200)}`);
 
   const data = await res.json();

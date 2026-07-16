@@ -1,6 +1,8 @@
 {
   "_readme": "Content OS · M2 material source catalog. ONE file, many source objects. Each object's 'type' is api | rss | ingest | brightdata. api/rss/brightdata run IN the function; ingest sources are handed in by n8n. Add a source = add one object, redeploy. NEVER put API keys here — use 'auth_ref' to name a Supabase secret env var (brightdata uses the BRIGHTDATA_API_KEY secret automatically). This file knows NOTHING about pages — page wiring lives in the Supabase tables page_material_sources (api), page_reference_sources (reference harvest / brightdata social), page_article_sources (rss/scrape). Placeholders {region} etc. in 'url' are filled per-pull from each page's row.",
-  "_brightdata_readme": "type='brightdata' sources call Bright Data's sync scraper endpoint. dataset_id (gd_...) comes from the Bright Data dashboard /cp/datasets — paste it in (placeholders 'gd_REPLACE_*' error defensively until set). bd_input='prompt' = AI-search scraper (keyword becomes the prompt; no pages needed). bd_input='url' = scrape the ref pages in page_reference_sources matching 'platform' for the selected pages, then keyword-filter. Bright Data is OPT-IN: it only runs when its source name is listed in the request body's 'sources' (keeps default TMDB search fast/free). field_map keys are best-effort — confirm against the first real scrape (the full raw payload is retained regardless).",
+  "_brightdata_readme": "type='brightdata' sources call Bright Data's sync scraper endpoint. dataset_id (gd_...) comes from the Bright Data dashboard /cp/datasets — paste it in (placeholders 'gd_REPLACE_*' error defensively until set). bd_input='prompt' = AI-search scraper (keyword becomes the prompt; bd_url = the chat surface the scraper drives, a REQUIRED input alongside prompt). bd_input='url' = scrape the ref pages in page_reference_sources matching 'platform' for the selected pages, then keyword-filter. Bright Data is OPT-IN: it only runs when its source name is listed in the request body's 'sources' (keeps default TMDB search fast/free). field_map keys are best-effort — confirm against the first real scrape (the full raw payload is retained regardless).",
+  "_brightdata_collect_vs_discover": "CRITICAL (learned 2026-07-16): one gd_ dataset = one scraper GROUP (e.g. 'Instagram - Posts'), and each group exposes 'collect by URL' (you hand it exact item URLs — a tweet, a video, a pin) AND 'discover by ...' (you hand it a seed like a profile/channel and it FINDS the items). Same dataset_id; the mode is a query param on the call: &type=discover_new&discover_by=<method>. Our model is profile-URL -> that page's recent posts, which is DISCOVER for every platform except Facebook — 'Facebook - Pages Posts by Profile URL' is natively profile->posts in collect mode, which is why it worked first try and set a misleading precedent. So a bd_* social entry needs the dataset_id of the POSTS group (not the Profiles group) plus bd_discover_by. The bd_discover_by values below are read off the dashboard's endpoint labels — confirm each against Bright Data's API docs on first real run (RAZ-36). The in-function sync path never uses these (social is async-only); the n8n harvest workflow does.",
+  "_external_id_help": "external_id feeds the dedup grain (source, external_id, window_day) — dedup.ts builds its key as source|external_id, so a field_map path that does NOT exist in the real payload silently yields ONE shared key per source per day, and everything after the first item is dropped as a duplicate on the sink='events' path. Verified 2026-07-16: the AI scrapers return no 'response_id' (real keys: prompt, answer_text, url, citations, sources, timestamp, index), so all five map external_id -> prompt = one answer per keyword per day, which is the grain we want. Always confirm external_id resolves against a real payload before trusting a source on the events path.",
   "_field_map_help": "field_map keys are OUR SourceEnriched fields; values are the path inside the source's response for one item. Target keys: title (required), summary, entities, image_url, media, url, lang, region, country, topic_tags, published_at, engagement, external_id, kind. Wrap literals as {\"const\": \"...\"}. Paths use dot notation. 'image_base' prefixes relative image paths (e.g. TMDB poster_path). 'kind' can also come per-subscription via a page_material_sources param.",
   "sources": [
     {
@@ -134,43 +136,48 @@
     {
       "name": "bd_perplexity", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_perplexity", "bd_input": "prompt",
+      "url": "", "auth_ref": null, "dataset_id": "gd_m7dhdot1vw9a7gc1n", "bd_input": "prompt",
+      "bd_url": "https://www.perplexity.ai",
       "defaults": {}, "response_items_path": "",
-      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "response_id" },
-      "notes": "AI-search: Bright Data Perplexity scraper. keyword -> prompt. Opt-in via body.sources=['bd_perplexity']. Paste dataset_id."
+      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "prompt" },
+      "notes": "AI-search: Bright Data 'Perplexity Search - search by prompt' (dataset gd_m7dhdot1vw9a7gc1n, wired 2026-07-16). keyword -> prompt. Declared inputs: url(req) + prompt(req) + country, index, export_markdown_file. Opt-in via body.sources=['bd_perplexity']."
     },
     {
       "name": "bd_chatgpt", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_chatgpt", "bd_input": "prompt",
+      "url": "", "auth_ref": null, "dataset_id": "gd_m7aof0k82r803d5bjm", "bd_input": "prompt",
+      "bd_url": "https://chatgpt.com/",
       "bd_params": { "web_search": true },
       "defaults": {}, "response_items_path": "",
-      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "response_id" },
-      "notes": "AI-search: Bright Data ChatGPT scraper. bd_params.web_search=true enables live web search. Opt-in. Paste dataset_id."
+      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "prompt" },
+      "notes": "AI-search: Bright Data 'ChatGPT Search - search by prompt' (dataset gd_m7aof0k82r803d5bjm, wired 2026-07-16). Declared inputs: url(req) + prompt(req) + country, index, require_sources, additional_prompt, web_search. bd_params.web_search=true enables live web search (scraper default is false). Opt-in."
     },
     {
       "name": "bd_gemini", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_gemini", "bd_input": "prompt",
+      "url": "", "auth_ref": null, "dataset_id": "gd_mbz66arm2mf9cu856y", "bd_input": "prompt",
+      "bd_url": "https://gemini.google.com/",
       "defaults": {}, "response_items_path": "",
-      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "response_id" },
-      "notes": "AI-search: Bright Data Gemini scraper. No web_search control (per docs). Opt-in. Paste dataset_id."
+      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "prompt" },
+      "notes": "AI-search: Bright Data 'Gemini Search - collect by URL' (dataset gd_mbz66arm2mf9cu856y, wired 2026-07-16). Declared inputs: url(req) + prompt(req) + country, index. No web_search control. Opt-in."
     },
     {
       "name": "bd_google_ai", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
       "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_google_ai", "bd_input": "prompt",
+      "bd_url": "https://www.google.com/",
       "defaults": {}, "response_items_path": "",
-      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "response_id" },
-      "notes": "AI-search: Bright Data Google AI Mode scraper. Opt-in. Paste dataset_id."
+      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "prompt" },
+      "notes": "AI-search: Bright Data Google AI Mode. STILL NEEDS dataset_id — the 2026-07-16 screenshot (google.png) captured 'Google Maps full information' (gd_m8ebnr0q2qlklc02fz), a different scraper we do not want. Re-screenshot the 'Google AI Mode Search' endpoint in google.com's sidebar. Errors defensively until pasted."
     },
     {
       "name": "bd_copilot", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_copilot", "bd_input": "prompt",
+      "url": "", "auth_ref": null, "dataset_id": "gd_m7di5jy6s9geokz8w", "bd_input": "prompt",
+      "bd_url": "https://copilot.microsoft.com/chats",
       "defaults": {}, "response_items_path": "",
-      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "response_id" },
-      "notes": "AI-search: Bright Data Copilot scraper. Opt-in. Paste dataset_id."
+      "field_map": { "title": "prompt", "summary": "answer_text", "url": "url", "external_id": "prompt" },
+      "notes": "AI-search: Bright Data 'Bing Copilot Search - collect by URL' (dataset gd_m7di5jy6s9geokz8w, wired 2026-07-16). Declared inputs: url(req) + prompt(req) + country, index. Opt-in."
     },
 
     {
@@ -186,57 +193,64 @@
       "name": "bd_instagram", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
       "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_instagram", "bd_input": "url", "platform": "instagram",
+      "bd_discover_by": "url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "user_posted", "summary": "caption", "external_id": "post_id", "image_url": "display_url", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social: Bright Data Instagram posts. Opt-in. Paste dataset_id; confirm field_map vs real output."
+      "notes": "Social: Bright Data Instagram posts. STILL NEEDS dataset_id — the 2026-07-16 screenshot (instagram.png) captured the 'Instagram - Profiles' group (gd_l1vikfch901nx3by4), which returns profile metadata, not posts. Re-screenshot the 'Instagram - Posts' group (its 'Discover by url' endpoint). Errors defensively until pasted."
     },
     {
       "name": "bd_x", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_x", "bd_input": "url", "platform": "x",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lwxkxvnf1cynvib9co", "bd_input": "url", "platform": "x",
+      "bd_discover_by": "profile_url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "user_posted", "summary": "description", "external_id": "id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social: Bright Data X/Twitter posts. Opt-in. Paste dataset_id; confirm field_map vs real output."
+      "notes": "Social: Bright Data 'X (formerly Twitter) - Posts' (dataset gd_lwxkxvnf1cynvib9co, wired 2026-07-16). Group is correct; use discover_by=profile_url so a profile ref_url yields recent posts (its collect-by-URL mode wants individual /status/ URLs). Opt-in. Confirm field_map vs real output."
     },
     {
       "name": "bd_tiktok", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
       "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_tiktok", "bd_input": "url", "platform": "tiktok",
+      "bd_discover_by": "profile_url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "profile_username", "summary": "description", "external_id": "post_id", "image_url": "preview_image", "url": "url", "published_at": "create_time", "engagement": "engagement" },
-      "notes": "Social: Bright Data TikTok posts. Opt-in. Paste dataset_id; confirm field_map vs real output."
+      "notes": "Social: Bright Data TikTok posts. STILL NEEDS dataset_id — the 2026-07-16 screenshot (titok.png) captured the 'TikTok - Profiles' group (gd_l1villgoiiidt09ci), not posts. Re-screenshot 'TikTok - Posts' (or 'TikTok - Posts by Profile Fast API', which is natively profile->posts and may suit us better). Errors defensively until pasted."
     },
     {
       "name": "bd_youtube", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_youtube", "bd_input": "url", "platform": "youtube",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lk56epmy2i5g7lzu0k", "bd_input": "url", "platform": "youtube",
+      "bd_discover_by": "url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "title", "summary": "description", "external_id": "video_id", "image_url": "thumbnail", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social: Bright Data YouTube videos. Opt-in. Paste dataset_id; confirm field_map vs real output."
+      "notes": "Social: Bright Data 'Youtube - Videos posts' (dataset gd_lk56epmy2i5g7lzu0k, wired 2026-07-16). Group is correct; use discover_by=url so a channel ref_url yields its videos (collect mode wants individual watch?v= URLs). Other discover modes on this group: explore, hashtag, keyword, podcast url, search filters. Opt-in. Confirm field_map vs real output."
     },
     {
       "name": "bd_linkedin", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
       "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_linkedin", "bd_input": "url", "platform": "linkedin",
+      "bd_discover_by": "profile_url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "user_id", "summary": "post_text", "external_id": "post_id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social: Bright Data LinkedIn posts. Opt-in. Paste dataset_id; confirm field_map vs real output."
+      "notes": "Social: Bright Data LinkedIn posts. STILL NEEDS dataset_id — the 2026-07-16 screenshot (linkedin.png) captured the 'LinkedIn people profiles' group (gd_l1viktl72bvl7bjuj0), not posts. Re-screenshot the 'LinkedIn posts' group. Errors defensively until pasted."
     },
     {
       "name": "bd_reddit", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_reddit", "bd_input": "url", "platform": "reddit",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lvz8ah06191smkebj4", "bd_input": "url", "platform": "reddit",
+      "bd_discover_by": "subreddit_url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "title", "summary": "description", "external_id": "post_id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social: Bright Data Reddit posts. Opt-in. Paste dataset_id; confirm field_map vs real output."
+      "notes": "Social: Bright Data 'Reddit - Posts' (dataset gd_lvz8ah06191smkebj4, wired 2026-07-16). Group is correct; use discover_by=subreddit_url so a subreddit ref_url yields its posts (collect mode wants individual /comments/ URLs). Other discover modes: author url, keyword. Opt-in. Confirm field_map vs real output."
     },
     {
       "name": "bd_pinterest", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_pinterest", "bd_input": "url", "platform": "pinterest",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lk0sjs4d21kdr7cnlv", "bd_input": "url", "platform": "pinterest",
+      "bd_discover_by": "profile_url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "user_name", "summary": "description", "external_id": "post_id", "image_url": "image_url", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social: Bright Data Pinterest pins. Opt-in. Paste dataset_id; confirm field_map vs real output."
+      "notes": "Social: Bright Data 'Pinterest - Posts' (dataset gd_lk0sjs4d21kdr7cnlv, wired 2026-07-16). Group is correct; use discover_by=profile_url so a profile ref_url yields its pins (collect mode wants individual /pin/ URLs). Opt-in. Confirm field_map vs real output."
     },
     {
       "name": "bd_quora", "type": "brightdata", "enabled": true, "search": true,
@@ -244,24 +258,26 @@
       "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_quora", "bd_input": "url", "platform": "quora",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "title", "summary": "content", "external_id": "post_id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social: Bright Data Quora. Opt-in. Paste dataset_id; confirm field_map vs real output."
+      "notes": "Social: Bright Data Quora. No screenshot in the 2026-07-16 batch — dataset_id still needed. Errors defensively until pasted."
     },
 
     {
-      "name": "bd_snapchat", "type": "brightdata", "enabled": false, "search": true,
+      "name": "bd_snapchat", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_snapchat", "bd_input": "url", "platform": "snapchat",
+      "url": "", "auth_ref": null, "dataset_id": "gd_ma0ydx431w6stl16ge", "bd_input": "url", "platform": "snapchat",
+      "bd_discover_by": "profile",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "user_name", "summary": "content", "external_id": "post_id", "url": "url", "published_at": "date_posted" },
-      "notes": "UNVERIFIED (disabled): confirm Bright Data offers a Snapchat scraper in /cp/datasets before enabling. Snapchat is the least likely to exist."
+      "notes": "Social: Bright Data 'Snapchat posts' (dataset gd_ma0ydx431w6stl16ge, wired 2026-07-16). EXISTS after all — enabled (was disabled as 'least likely to exist'). Use discover_by=profile (collect mode wants individual /spotlight/ URLs). Opt-in. Confirm field_map vs real output."
     },
     {
-      "name": "bd_vimeo", "type": "brightdata", "enabled": false, "search": true,
+      "name": "bd_vimeo", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_vimeo", "bd_input": "url", "platform": "vimeo",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lxk88z3v1ketji4pn", "bd_input": "url", "platform": "vimeo",
+      "bd_discover_by": "url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "title", "summary": "description", "external_id": "video_id", "url": "url", "published_at": "date_posted" },
-      "notes": "UNVERIFIED (disabled): confirm Bright Data offers a Vimeo scraper before enabling."
+      "notes": "Social: Bright Data 'Vimeo - Videos posts' (dataset gd_lxk88z3v1ketji4pn, wired 2026-07-16). EXISTS — enabled (was disabled as unverified). Use discover_by=url (collect mode wants individual video URLs). Opt-in. Confirm field_map vs real output."
     },
     {
       "name": "bd_threads", "type": "brightdata", "enabled": false, "search": true,
@@ -269,7 +285,7 @@
       "url": "", "auth_ref": null, "dataset_id": "gd_REPLACE_threads", "bd_input": "url", "platform": "threads",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "user_posted", "summary": "content", "external_id": "post_id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "UNVERIFIED (disabled): confirm Bright Data offers a Threads scraper before enabling."
+      "notes": "UNVERIFIED (disabled): no screenshot in the 2026-07-16 batch — confirm Bright Data offers a Threads scraper before enabling. (Snapchat and Vimeo, previously flagged the same way, both turned out to exist.)"
     }
   ]
 }
