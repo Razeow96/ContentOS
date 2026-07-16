@@ -137,8 +137,8 @@
       "url": "", "auth_ref": null, "dataset_id": "gd_lu702nij2f790tmv9h", "bd_input": "url", "platform": "tiktok",
       "bd_discover_by": "profile_url",
       "defaults": {}, "response_items_path": "",
-      "field_map": { "title": "profile_username", "summary": "description", "external_id": "post_id", "image_url": "preview_image", "url": "url", "published_at": "create_time", "engagement": "engagement" },
-      "notes": "Social. discover_by CONFIRMED vs dashboard (collect/keyword/profile_url/url). field_map unverified."
+      "field_map": { "title": "description", "summary": "description", "kind": "post_type", "external_id": "post_id", "image_url": "preview_image", "url": "url", "published_at": "create_time", "topic_tags": "hashtags", "media": "video_url", "engagement": { "likes": "digg_count", "comments": "comment_count", "shares": "num_share_count" } },
+      "notes": "Social. discover_by=profile_url PROVEN live 2026-07-16 (10 posts, netflix). field_map CORRECTED against real records: title was profile_username (the account, 1-distinct) -> description. No 'engagement' object; flat counts -> {likes:digg_count, comments:comment_count, shares:num_share_count}. play_count + collect_count EXCLUDED from engagement (views dwarf likes — same rule as FB play_count). kind=post_type. media=video_url. topic_tags=hashtags. carousel_images exists (null here) — TikTok photo-carousels would populate it; UNVERIFIED, this account posts video only."
     },
     {
       "name": "bd_youtube", "type": "brightdata", "enabled": true, "search": true,
@@ -153,7 +153,7 @@
       "name": "bd_linkedin", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
       "url": "", "auth_ref": null, "dataset_id": "gd_lyy3tktm25m4avu764", "bd_input": "url", "platform": "linkedin",
-      "bd_discover_by": "profile_url",
+      "bd_discover_by": "company_url",
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "user_id", "summary": "post_text", "external_id": "post_id", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
       "notes": "Social. discover_by CONFIRMED vs dashboard; use company_url instead when a ref_url is a company page, not a person. field_map unverified."
@@ -173,8 +173,8 @@
       "url": "", "auth_ref": null, "dataset_id": "gd_lk0sjs4d21kdr7cnlv", "bd_input": "url", "platform": "pinterest",
       "bd_discover_by": "profile_url",
       "defaults": {}, "response_items_path": "",
-      "field_map": { "title": "user_name", "summary": "description", "external_id": "post_id", "image_url": "image_url", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "Social. discover_by label-inferred — confirm on first run. field_map unverified."
+      "field_map": { "title": "title", "summary": "content", "kind": "post_type", "external_id": "post_id", "image_url": "image_video_url", "url": "url", "published_at": "date_posted", "topic_tags": "hashtags", "media": "image_video_url", "engagement": { "likes": "likes", "comments": "comments_num" } },
+      "notes": "Social. discover_by=profile_url PROVEN live 2026-07-16 (9 pins, imdb). field_map CORRECTED against real records: title was user_name (the account, 1-distinct) — Pinterest DOES have a real per-pin 'title'; summary=content, image=image_video_url (was 'description'/'image_url', neither exists). kind=post_type, topic_tags=hashtags. No shares on Pinterest; likes/comments_num are genuinely low/0 — real data, not a bad map."
     },
     {
       "name": "bd_quora", "type": "brightdata", "enabled": true, "search": true,
