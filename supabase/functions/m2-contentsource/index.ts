@@ -19,7 +19,7 @@ import {
   loadRefRows, buildHarvestPlan,
 } from "./config/config.ts";
 import { filterFresh } from "./config/dedup.ts";
-import { normalize, fanOut } from "./service/normalize.ts";
+import { normalize, fanOut, applyStrategy } from "./service/normalize.ts";
 import { writeSourceEvents, writeManualResults } from "./service/writer.ts";
 import { aiMatch } from "./service/manuel_search_ai.ts";
 import { pullApi } from "./adapters/api.ts";
@@ -45,10 +45,16 @@ interface RunBody {
   // harvest_plan mode:
   scope?: "daily" | "all";
   ref_ids?: number[];
+  // ingest mode, RAZ-36: n8n echoes these back from the harvest_plan job so the
+  // per-ref strategy is applied without re-reading page_reference_sources.
+  strategy?: string;
+  window_days?: number | null;
+  cap?: number | null;
 }
 
 interface Summary {
   pulled: number;
+  selected: number;
   fresh: number;
   written: number;
   jobs: number;
@@ -58,7 +64,7 @@ interface Summary {
 }
 
 function newSummary(): Summary {
-  return { pulled: 0, fresh: 0, written: 0, jobs: 0, sources: new Set(), errors: [] };
+  return { pulled: 0, selected: 0, fresh: 0, written: 0, jobs: 0, sources: new Set(), errors: [] };
 }
 
 async function fetchItems(job: MaterialJob, provided?: unknown[]): Promise<unknown[]> {
@@ -71,13 +77,22 @@ async function fetchItems(job: MaterialJob, provided?: unknown[]): Promise<unkno
   return [];
 }
 
-async function process(job: MaterialJob, provided: unknown[] | undefined, sum: Summary) {
+async function process(
+  job: MaterialJob,
+  provided: unknown[] | undefined,
+  sum: Summary,
+  sel?: { strategy?: string; window_days?: number | null; cap?: number | null },
+) {
   const items = await fetchItems(job, provided);
   const raw = normalize(job, items);
   sum.pulled += raw.length;
   sum.sources.add(job.source.name);
 
-  const fresh = await filterFresh(raw, SUPABASE_URL, SERVICE_KEY);
+  // RAZ-36: apply the ref's strategy before dedup, so only the chosen posts are emitted.
+  const chosen = sel?.strategy ? applyStrategy(raw, sel.strategy, sel.window_days, sel.cap) : raw;
+  sum.selected += chosen.length;
+
+  const fresh = await filterFresh(chosen, SUPABASE_URL, SERVICE_KEY);
   sum.fresh += fresh.length;
 
   const events = fanOut(job, fresh);
@@ -166,7 +181,11 @@ async function run(body: RunBody) {
     try {
       const job = ingestJob(catalog, body);
       sum.jobs = 1;
-      await process(job, body.items ?? [], sum);
+      await process(job, body.items ?? [], sum, {
+        strategy: body.strategy,
+        window_days: body.window_days,
+        cap: body.cap,
+      });
     } catch (e) {
       sum.errors.push((e as Error).message);
     }
@@ -190,6 +209,7 @@ async function run(body: RunBody) {
     jobs: sum.jobs,
     sources: [...sum.sources],
     material_pulled: sum.pulled,
+    material_selected: sum.selected,
     material_fresh: sum.fresh,
     written: sum.written,
     ai: sum.ai ?? null,

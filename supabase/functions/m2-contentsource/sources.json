@@ -54,7 +54,7 @@
       "url": "", "auth_ref": null,
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "page_name", "summary": "content", "external_id": "post_id", "image_url": "media.0.url", "url": "url", "published_at": "date_posted", "engagement": "engagement" },
-      "notes": "INGEST source (RAZ-36): n8n runs Bright Data then POSTs the raw items here. n8n pre-shapes 'engagement' {likes,comments,shares}. tier=inspiration = reference ONLY, never verbatim (contract guardrail)."
+      "notes": "GENERIC ingest fallback. NOT used by the RAZ-36 harvest — that ingests under each platform's own bd_* entry so the platform-verified field_map (incl. composite engagement) applies; this entry's bare 'engagement' path would need n8n to pre-shape, i.e. per-platform knowledge in the orchestrator. tier=inspiration = reference ONLY, never verbatim (contract guardrail)."
     },
 
     {

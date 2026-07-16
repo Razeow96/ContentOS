@@ -91,7 +91,13 @@ export function buildHarvestPlan(
       page_id: r.page_id,
       platform: r.platform,
       source: src.name,
-      ingest_source: "reference_harvest",
+      // Ingest under the PLATFORM entry, not the generic reference_harvest one.
+      // Its field_map is the platform-verified one (e.g. bd_facebook maps composite
+      // engagement likes/num_comments/num_shares), whereas reference_harvest maps
+      // engagement to a bare "engagement" path and so assumes n8n pre-shaped it —
+      // which would mean per-platform knowledge in the orchestrator, and silently
+      // yields engagement=null (best_performing then ranks everything as 0).
+      ingest_source: src.name,
       dataset_id: src.dataset_id,
       discover_by: src.bd_discover_by ?? null,
       trigger_url,
@@ -99,9 +105,9 @@ export function buildHarvestPlan(
       strategy: r.strategy,
       window_days: r.window_days,
       cap: r.cap,
-      // latest_n = what the scrapers natively return. best_performing needs
-      // engagement ranking over window_days, which isn't built yet (RAZ-36).
-      strategy_supported: r.strategy === "latest_n",
+      // Both strategies are applied on the ingest path (normalize.ts applyStrategy).
+      // n8n echoes these three fields back so the selection needs no extra DB read.
+      strategy_supported: r.strategy === "latest_n" || r.strategy === "best_performing",
     });
   }
   return { jobs, skipped };

@@ -49,6 +49,56 @@ export function normalize(job: MaterialJob, items: unknown[]): RawMaterial[] {
   return out;
 }
 
+// Sum the numeric values of an engagement object ({likes, comments, shares} -> 15).
+// Safe ONLY because ranking happens within ONE reference page = one platform. Never
+// compare these across platforms (views != searches != likes) — see CLAUDE.md.
+function engagementScore(m: RawMaterial): number {
+  const e = m.engagement;
+  if (!e || typeof e !== "object") return 0;
+  let total = 0;
+  for (const v of Object.values(e)) {
+    const n = typeof v === "number" ? v : Number(v);
+    if (Number.isFinite(n)) total += n;
+  }
+  return total;
+}
+
+function ts(m: RawMaterial): number {
+  const t = m.published_at ? Date.parse(m.published_at) : NaN;
+  return Number.isFinite(t) ? t : 0;
+}
+
+// RAZ-36 per-ref selection (owner-confirmed 2026-07-13):
+//   latest_n        -> newest first, take cap.
+//   best_performing -> keep the window, rank by engagement, take cap.
+// Applied AFTER normalize (so it reads mapped published_at/engagement) and BEFORE
+// dedup, so the dedup/emit path only ever sees the posts we actually chose.
+// Scrapers that take a post-count input already cap themselves; this also covers
+// the ones that don't, so cap means the same thing on every platform.
+export function applyStrategy(
+  materials: RawMaterial[],
+  strategy?: string | null,
+  window_days?: number | null,
+  cap?: number | null,
+): RawMaterial[] {
+  let out = materials;
+
+  if (strategy === "best_performing") {
+    if (window_days && window_days > 0) {
+      const cutoff = Date.now() - window_days * 86_400_000;
+      // Undated posts are dropped here on purpose: an unknown date can't be shown
+      // to fall inside the window, and silently keeping them would let stale posts
+      // win on engagement alone.
+      out = out.filter((m) => ts(m) >= cutoff);
+    }
+    out = [...out].sort((a, b) => engagementScore(b) - engagementScore(a));
+  } else {
+    out = [...out].sort((a, b) => ts(b) - ts(a));
+  }
+
+  return cap && cap > 0 ? out.slice(0, cap) : out;
+}
+
 export function fanOut(job: MaterialJob, materials: RawMaterial[]): SourceEnriched[] {
   const events: SourceEnriched[] = [];
   const trig = job.trigger;
