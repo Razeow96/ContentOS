@@ -72,3 +72,10 @@ Living state doc (not an append log — trimmed to only what's current). Content
 - Deno not installed locally → type-check happens at `supabase functions deploy` (bundler).
 - Postgres index expr must be immutable — dedup uses a STORED generated column.
 - FB Graph: post_impressions* insights deprecated.
+
+## AR-1 Admin UI — documented 2026-07-14, BUILD STARTS 2026-07-15 (nothing built yet)
+- **AR-1 = additional requirement** (operator UI over the config plane), NOT main ADR-001 scope; unrelated to ADR-001 §A1. Spec doc in Linear: "AR-1 · Admin UI (config plane) — additional requirement" (slug `11bce352561b`).
+- **What:** local-only static app `admin/` (index.html + app.js + style.css + gitignored config.js with Supabase key; config.example.js committed). No auth, no deploy — only owner's laptop has the key. Left menu: Trend · Content Source. **Campaign** = UI-level named group of `page_*` config rows (engines unaware); needs one migration: `campaign text` column on page_trend_sources / page_material_sources / page_reference_sources / page_article_sources. No M1/M2 logic changes (except tiny read-only `catalog` mode on m2-contentsource in v2).
+- **RAZ-39 (Backlog)** = v1: campaign-column SQL block (owner runs) + shell + Trend screen (campaign CRUD → page_trend_sources; per-platform honest fields — google_trends_daily geo-only; trends_enabled gates; read-only trends feed).
+- **RAZ-40 (Backlog, blocked by RAZ-39)** = v2: `catalog` mode + adapter board (~17 entries, deployed truth) + 3 campaign tabs (material/reference/article tables) + sources_enabled gates + run-now (mode=search POST; RAZ-36 harvest webhook when it exists).
+- **Resume tomorrow:** start RAZ-39 — hand owner the campaign-column SQL block, then build the Trend screen.
