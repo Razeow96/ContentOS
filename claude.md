@@ -2,6 +2,13 @@
 
 These are binding rules for how Content OS is built. They come from ADR-001 (Linear). If a request conflicts with these, follow the rule and say so.
 
+## Start of EVERY session — read these first
+Before answering anything or touching code, read **both**:
+1. **`learnrules.md`** — working rules: SESSION.md discipline, Linear/tracking discipline, hard boundaries.
+2. **`SESSION.md`** — current state of the build: what's live, what's open, what's pending on the owner.
+
+Treat SESSION.md as a snapshot that may be stale — it is only rewritten when asked, so it can lag the real state by days. **Verify before relying on it**: check Linear for the live board, and check the live DB/deployment when a claim is load-bearing (e.g. "migration X is applied"). Say so when it's out of date rather than building on a stale premise.
+
 ## Core stance
 Content OS is a **domain-driven, event-driven** system. 10 domains, each a bounded context. We are migrating OFF 3 legacy n8n workflows using the **strangler pattern** — carve out one domain at a time, never break what's live.
 
