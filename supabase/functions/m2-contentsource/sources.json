@@ -110,8 +110,8 @@
       "url": "", "auth_ref": null, "dataset_id": "gd_lkaxegm826bjpoo9m5", "bd_input": "url", "platform": "facebook",
       "bd_params": { "num_of_posts": 10 },
       "defaults": {}, "response_items_path": "",
-      "field_map": { "title": "page_name", "summary": "content", "external_id": "post_id", "image_url": "post_external_image", "url": "url", "published_at": "date_posted", "engagement": { "likes": "likes", "comments": "num_comments", "shares": "num_shares" } },
-      "notes": "Social. The ONLY collect-mode profile->posts scraper — hence no bd_discover_by (see readme). field_map VERIFIED vs real output 2026-07-14. header_image is the page cover, not per-post."
+      "field_map": { "title": "content", "summary": "content", "external_id": "post_id", "image_url": "post_image", "url": "url", "published_at": "date_posted", "topic_tags": "hashtags", "media": "attachments", "engagement": { "likes": "likes", "comments": "num_comments", "shares": "num_shares" } },
+      "notes": "Social. The ONLY collect-mode profile->posts scraper — hence no bd_discover_by (see readme). field_map CORRECTED against a real 10-post harvest 2026-07-16: image_url=post_image (post_external_image is the LINK-PREVIEW image and is null on normal image posts); title=content (page_name is the page, identical on every post). A FB post has no title — title and summary are both the caption by design. page_logo/header_image/avatar_image_url are all page-level, never per-post."
     },
     {
       "name": "bd_instagram", "type": "brightdata", "enabled": true, "search": true,

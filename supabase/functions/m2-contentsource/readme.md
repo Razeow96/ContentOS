@@ -47,6 +47,18 @@ Gating matches the material path — a ref only harvests if its page has `page_s
 
 `field_map` keys are OUR SourceEnriched fields; values are the dot-path into the source's response for one item. Targets: `title` (required), `summary`, `entities`, `image_url`, `media`, `url`, `lang`, `region`, `country`, `topic_tags`, `published_at`, `engagement`, `external_id`, `kind`. Literals wrap as `{"const": "..."}`. `image_base` prefixes relative image paths (TMDB `poster_path`). `kind` can also arrive per-subscription via a `page_material_sources` param.
 
+### ⚠️ Verify a field_map against a REAL payload, not a plausible one
+
+Every field_map bug so far has been a plausible-looking key that the platform doesn't actually return, and each one failed *silently* — no error, just a null or a wrong value riding all the way into `source_events`.
+
+Facebook, caught on the first real harvest (2026-07-16), having been marked "VERIFIED" two days earlier:
+
+- `image_url` pointed at `post_external_image` — that's the **link-preview** image, null on a normal image post. The real one is `post_image`. The earlier "verification" used a sample with no images and generalised from it.
+- `title` pointed at `page_name` — the *page*, so all 10 posts came out titled "Let's Talk Movies". A FB post has no title; `title` and `summary` are both the caption now, by design.
+- `hashtags` was sitting there unmapped while `topic_tags` went null.
+
+The lesson: "the scrape returned rows" is not verification. Read the raw record's actual keys — the full payload is retained on every event, so `select payload->'raw'` from `source_events` and check field by field.
+
 ### ⚠️ external_id is load-bearing — verify it against a real payload
 
 `dedup.ts` builds its key as `source|external_id`. A field_map path that **doesn't exist** in the real payload yields ONE shared key per source per day, so everything after the first item is silently dropped as a duplicate on the `sink="events"` path.
