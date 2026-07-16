@@ -81,6 +81,10 @@ export function buildHarvestPlan(
     // FIND the posts; absent = collect-by-URL (Facebook's profile->posts scraper).
     let trigger_url = `${BD_BASE}/trigger?dataset_id=${encodeURIComponent(src.dataset_id)}&format=json&notify=false&include_errors=true`;
     if (src.bd_discover_by) trigger_url += `&type=discover_new&discover_by=${encodeURIComponent(src.bd_discover_by)}`;
+    // Cap the DISCOVER phase itself. Without this BD crawls the whole profile
+    // open-endedly — reddit/youtube ran >10min and looked "slow" when the job was
+    // just unbounded (caught 2026-07-16).
+    if (r.cap && r.cap > 0) trigger_url += `&limit_per_input=${r.cap}`;
 
     // Merge the row's cap into the scraper's post-count input when it declares one.
     const extra: Record<string, unknown> = { ...(src.bd_params ?? {}) };
