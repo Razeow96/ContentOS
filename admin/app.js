@@ -422,6 +422,87 @@ async function saveCampaign() {
   }
 }
 
+/* ---------------- infrastructure screen (M0 rate-limit audit) ---------------- */
+
+const infra = { provider: "", deniedOnly: false, timer: null };
+
+async function renderInfra() {
+  const day = new Date().toISOString().slice(0, 10);
+  let limits = [], counters = [], log = [];
+  try {
+    [limits, counters] = await Promise.all([
+      db("/api_rate_limits?select=*&order=provider.asc"),
+      db(`/api_usage_counters?select=*&day=eq.${day}`),
+    ]);
+    let q = `/api_request_log?select=*&order=requested_at.desc&limit=100`;
+    if (infra.provider) q += `&provider=eq.${encodeURIComponent(infra.provider)}`;
+    if (infra.deniedOnly) q += `&allowed=eq.false`;
+    log = await db(q);
+  } catch (e) {
+    return ($("#screen").innerHTML = `<h1>Infrastructure</h1>
+      <div class="card"><h2>Rate-limit tables missing</h2>
+      <p class="hint">Run <span class="mono">supabase/database/20260716_m0_rate_limit.sql</span> — until then every third-party call is denied (fail-closed by design).</p>
+      <p class="hint mono">${esc(e.message).slice(0, 200)}</p></div>`);
+  }
+
+  const cnt = Object.fromEntries(counters.map((c) => [c.provider, c]));
+  const bar = (used, max) => {
+    if (max === null || max === undefined) return `<span class="tag">no cap</span>`;
+    const pct = Math.min(100, Math.round((used / max) * 100));
+    const col = pct >= 90 ? "var(--bad)" : pct >= 60 ? "var(--warn)" : "var(--ok)";
+    return `<div style="background:var(--panel-2);border-radius:4px;height:8px;width:140px;display:inline-block;vertical-align:middle">
+      <div style="background:${col};height:8px;border-radius:4px;width:${pct}%"></div></div>
+      <span class="mono" style="margin-left:6px">${used}/${max}</span>`;
+  };
+
+  $("#screen").innerHTML = `<h1>Infrastructure</h1>
+    <p class="sub">M0 API gate — every third-party call needs approval; every attempt is on the ledger.</p>
+
+    <div class="card">
+      <h2>Today's budgets</h2>
+      <p class="hint">From <span class="mono">api_rate_limits</span> (config = data; edit rows to change budgets). A provider with no row is denied.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Provider</th><th>Requests</th><th>Records</th><th>Enabled</th></tr>
+        ${limits.map((l) => {
+          const c = cnt[l.provider] || { requests: 0, records: 0 };
+          return `<tr><td class="mono">${esc(l.provider)}</td>
+            <td>${bar(c.requests, l.max_requests_per_day)}</td>
+            <td>${bar(c.records, l.max_records_per_day)}</td>
+            <td><span class="tag ${l.enabled ? "on" : "off"}">${l.enabled ? "on" : "off"}</span></td></tr>`;
+        }).join("") || `<tr><td colspan="4" class="empty">No budgets configured.</td></tr>`}
+      </table></div>
+    </div>
+
+    <div class="card">
+      <div class="spread"><h2>Request ledger <span class="tag">last 100</span></h2>
+        <div class="row">
+          <select id="ifprov"><option value="">all providers</option>
+            ${limits.map((l) => `<option value="${esc(l.provider)}" ${infra.provider === l.provider ? "selected" : ""}>${esc(l.provider)}</option>`).join("")}
+          </select>
+          <label class="check"><input type="checkbox" id="ifdenied" ${infra.deniedOnly ? "checked" : ""}> denied only</label>
+          <button class="btn ghost" id="ifrefresh">Refresh</button>
+        </div>
+      </div>
+      <div class="tablewrap"><table>
+        <tr><th>When (UTC)</th><th>Provider</th><th>Method</th><th>OK</th><th>Status</th><th>Recs</th><th>ms</th><th>URL / deny reason</th></tr>
+        ${log.map((r) => `<tr>
+            <td class="mono">${esc((r.requested_at || "").slice(5, 19).replace("T", " "))}</td>
+            <td class="mono">${esc(r.provider)}</td>
+            <td class="mono">${esc(r.method)}</td>
+            <td><span class="tag ${r.allowed ? "on" : "warn"}">${r.allowed ? "✓" : "DENIED"}</span></td>
+            <td class="mono">${r.status ?? "—"}</td>
+            <td class="mono">${r.records ?? r.estimated_records ?? "—"}</td>
+            <td class="mono">${r.duration_ms ?? "—"}</td>
+            <td class="mono" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.deny_reason || r.url || "")}</td>
+          </tr>`).join("") || `<tr><td colspan="8" class="empty">No requests logged yet.</td></tr>`}
+      </table></div>
+    </div>`;
+
+  $("#ifprov").addEventListener("change", (e) => { infra.provider = e.target.value; renderInfra(); });
+  $("#ifdenied").addEventListener("change", (e) => { infra.deniedOnly = e.target.checked; renderInfra(); });
+  $("#ifrefresh").addEventListener("click", renderInfra);
+}
+
 /* ---------------- source screen (RAZ-40) ---------------- */
 
 function renderSource() {
@@ -444,6 +525,7 @@ async function refresh() {
 function render() {
   document.querySelectorAll(".navitem").forEach((b) => b.classList.toggle("active", b.dataset.screen === state.screen));
   if (state.screen === "trend") renderTrend();
+  else if (state.screen === "infra") renderInfra();
   else renderSource();
 
   if (!state.hasCampaign) {

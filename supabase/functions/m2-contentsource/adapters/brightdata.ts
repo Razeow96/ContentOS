@@ -13,6 +13,7 @@
 // dashboard (/cp/datasets); until pasted the job errors defensively (logged, other
 // sources still run).
 
+import { guardedFetch } from "../../m0-infrastructure/rate-limit/index.ts";
 import type { MaterialJob } from "../service/types.ts";
 
 const BD_BASE = "https://api.brightdata.com/datasets/v3";
@@ -75,13 +76,15 @@ async function buildInputs(
 async function pollSnapshot(id: string, key: string, deadline: number): Promise<unknown[]> {
   while (Date.now() < deadline) {
     await sleep(POLL_MS);
-    const p = await fetch(`${BD_BASE}/progress/${id}`, { headers: auth(key) });
+    const { res: p } = await guardedFetch(`${BD_BASE}/progress/${id}`, { headers: auth(key) });
     const status = ((await p.json()) as { status?: string })?.status;
     if (status === "ready") {
-      const s = await fetch(`${BD_BASE}/snapshot/${id}?format=json`, { headers: auth(key) });
+      const { res: s, done } = await guardedFetch(`${BD_BASE}/snapshot/${id}?format=json`, { headers: auth(key) });
       if (!s.ok) throw new Error(`snapshot ${id} download ${s.status}`);
       const data = await s.json();
-      return Array.isArray(data) ? data : data ? [data] : [];
+      const items = Array.isArray(data) ? data : data ? [data] : [];
+      await done(items.length);
+      return items;
     }
     if (status === "failed") throw new Error(`Bright Data snapshot ${id} failed`);
   }
@@ -113,18 +116,24 @@ export async function pullBrightData(
   const deadline = Date.now() + TIMEOUT_MS;
   // Body envelope is {"input":[...]} — the bare array the /trigger endpoint takes is
   // NOT what /scrape expects (confirmed against every scraper's own code example).
-  const res = await fetch(
+  // estimatedRecords = inputs.length (one answer per prompt); charged up-front on
+  // the record budget and reconciled by done() with the actual count.
+  const { res, done } = await guardedFetch(
     `${BD_BASE}/scrape?dataset_id=${encodeURIComponent(src.dataset_id)}&format=json&notify=false&include_errors=true`,
     {
       method: "POST",
       headers: { ...auth(brightKey), "Content-Type": "application/json" },
       body: JSON.stringify({ input: inputs }),
     },
+    { estimatedRecords: inputs.length },
   );
   if (!res.ok) throw new Error(`Bright Data ${src.name} ${res.status}: ${(await res.text()).slice(0, 200)}`);
 
   const data = await res.json();
-  if (Array.isArray(data)) return data;                    // sync: records returned directly
+  if (Array.isArray(data)) {                               // sync: records returned directly
+    await done(data.length);
+    return data;
+  }
   const snapshotId = (data as { snapshot_id?: string; id?: string })?.snapshot_id ??
     (data as { id?: string })?.id;
   if (snapshotId) return await pollSnapshot(snapshotId, brightKey, deadline); // deferred to async

@@ -19,3 +19,10 @@ note : treat linear as software documentation and project management including s
 - "It returned rows" is NOT verified. Read the raw record's keys: select payload->'raw' from source_events (raw is retained on every event).
 - Two bug signatures: field 0/N populated = key doesn't exist. Field 1-distinct across N = you mapped a page/parent-level field.
 - Only write "VERIFIED" in notes with the date + sample size you actually read. Never generalise from a null.
+
+## API rate-limit gate (learned 2026-07-16 — the 5,000-credit burn)
+- EVERY outbound API call, any platform, passes through the rate-limit setup BEFORE it is configured or fired. No direct raw calls from adapters or n8n.
+- Limits are budgets, not just req/sec: paid APIs bill per RECORD — a per-provider daily record/credit budget is what would have saved the trial.
+- A job still running at timeout = the job spec is unbounded, not a slow platform. Diagnose the spec; never re-fire with a longer window.
+- Always cap discovery (limit_per_input) and always CANCEL the snapshot on giveup — providers keep collecting (and billing) after you stop polling.
+- FETCH WRAPPER APPROVAL: every outbound call in edge functions goes through guardedFetch (supabase/functions/m0-infrastructure/rate-limit). acquire() must return allowed=true or the call DOES NOT FIRE — no raw fetch() in adapters, fail-closed, unconfigured provider = denied.

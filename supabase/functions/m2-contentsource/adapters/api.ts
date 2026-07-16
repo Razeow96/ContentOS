@@ -5,6 +5,7 @@
 // Config-only for any JSON API via url + field_map + response_items_path.
 
 import { getPath } from "../config/fieldmap.ts";
+import { guardedFetch } from "../../m0-infrastructure/rate-limit/index.ts";
 import type { MaterialJob } from "../service/types.ts";
 
 export async function pullApi(job: MaterialJob): Promise<unknown[]> {
@@ -22,12 +23,13 @@ export async function pullApi(job: MaterialJob): Promise<unknown[]> {
     }
   }
 
-  const res = await fetch(url, { headers });
+  const { res, done } = await guardedFetch(url, { headers }, { estimatedRecords: 20 });
   if (!res.ok) throw new Error(`API ${job.source.name} ${res.status}`);
   const json = await res.json();
 
   const path = job.source.response_items_path || "results";
   let items = getPath(json, path);
   if (!Array.isArray(items)) items = items ? [items] : [];
+  await done((items as unknown[]).length);
   return items as unknown[];
 }

@@ -3,6 +3,7 @@
 // filtered/ordered subset. Defensive: any failure returns the input unchanged
 // (never lose candidates because the AI step hiccuped).
 
+import { guardedFetch } from "../../m0-infrastructure/rate-limit/index.ts";
 import type { RawMaterial } from "./types.ts";
 
 export async function aiMatch(
@@ -21,7 +22,9 @@ export async function aiMatch(
     `No prose, no code fences.\n\n${list}`;
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    // Denial throws -> caught below -> materials returned unchanged: over-budget
+    // means the AI-assist step is skipped, never that candidates are lost.
+    const { res } = await guardedFetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "x-api-key": apiKey,
