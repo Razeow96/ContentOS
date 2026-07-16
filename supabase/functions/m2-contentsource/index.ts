@@ -8,9 +8,16 @@
 //   "search" — keyword fan-out across search sources ({query}=keyword). Optional AI match.
 //              sink="events" (autonomous trend enrichment, RAZ-26) or "manual"
 //              (RAZ-37 manual tool → isolated manual_search_results, no source_events).
+//   "harvest_plan" — READ-ONLY (RAZ-36). Resolves page_reference_sources against the
+//              Bright Data catalog and hands n8n ready-to-execute jobs. Writes nothing.
+//              n8n can't see sources.json (it's bundled here), so the join happens
+//              here and n8n stays a pure orchestrator holding zero config. (ADR-001)
 // n8n schedules & orchestrates; this function owns all source data. (ADR-001)
 
-import { loadCatalog, loadMaterialSubs, buildMaterialJobs, ingestJob, buildSearchJobs } from "./config/config.ts";
+import {
+  loadCatalog, loadMaterialSubs, buildMaterialJobs, ingestJob, buildSearchJobs,
+  loadRefRows, buildHarvestPlan,
+} from "./config/config.ts";
 import { filterFresh } from "./config/dedup.ts";
 import { normalize, fanOut } from "./service/normalize.ts";
 import { writeSourceEvents, writeManualResults } from "./service/writer.ts";
@@ -24,7 +31,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 interface RunBody {
-  mode?: "run" | "ingest" | "search";
+  mode?: "run" | "ingest" | "search" | "harvest_plan";
   trend?: Record<string, unknown> | null;
   source?: string;
   pages?: string[];
@@ -35,6 +42,9 @@ interface RunBody {
   ai_assist?: boolean;
   sink?: "events" | "manual";
   sources?: string[];
+  // harvest_plan mode:
+  scope?: "daily" | "all";
+  ref_ids?: number[];
 }
 
 interface Summary {
@@ -125,9 +135,29 @@ async function runSearch(body: RunBody, sum: Summary) {
   }
 }
 
+// RAZ-36. Read-only: resolve refs + catalog into work for n8n. Writes nothing.
+async function runHarvestPlan(body: RunBody) {
+  const refs = await loadRefRows(SUPABASE_URL, SERVICE_KEY, {
+    scope: body.scope ?? (body.ref_ids?.length ? "all" : "daily"),
+    ref_ids: body.ref_ids,
+    pages: body.pages,
+  });
+  const { jobs, skipped } = buildHarvestPlan(loadCatalog(), refs);
+  return {
+    ok: true,
+    mode: "harvest_plan",
+    refs_considered: refs.length,
+    jobs,
+    skipped,          // surfaced, not swallowed — a ref that can't harvest must be visible
+    planned_at: new Date().toISOString(),
+  };
+}
+
 async function run(body: RunBody) {
   const sum = newSummary();
   const mode = body.mode ?? "run";
+
+  if (mode === "harvest_plan") return await runHarvestPlan(body);
 
   if (mode === "search") {
     await runSearch(body, sum);

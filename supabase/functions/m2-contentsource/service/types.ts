@@ -31,6 +31,37 @@ export interface MaterialSource {
   notes?: string;
 }
 
+// One row from page_reference_sources (a reference page to harvest) — RAZ-36.
+export interface RefRow {
+  id: number;
+  page_id: string;
+  platform: string;
+  ref_url: string;
+  strategy: "latest_n" | "best_performing";
+  window_days: number | null;
+  cap: number | null;
+  enabled: boolean;
+  harvest_schedule: "daily" | "on_demand";
+}
+
+// One unit of work handed to n8n by harvest_plan mode. Self-contained on purpose:
+// n8n orchestrates the slow async I/O and holds NO config of its own (ADR-001).
+export interface HarvestJob {
+  ref_id: number;
+  page_id: string;
+  platform: string;
+  source: string;              // catalog entry that resolved this (e.g. bd_facebook)
+  ingest_source: string;       // what to POST back as mode=ingest source
+  dataset_id: string;
+  discover_by: string | null;  // null = collect-by-URL (Facebook only)
+  trigger_url: string;         // ready-to-call Bright Data URL, query params included
+  inputs: Record<string, unknown>[];
+  strategy: string;
+  window_days: number | null;
+  cap: number | null;
+  strategy_supported: boolean; // false = scrapes, but ranking not implemented yet
+}
+
 // One row from the page_material_sources table (per-page API-adapter subscription)
 export interface MaterialSubscription {
   page_id: string;

@@ -17,6 +17,17 @@ n8n (schedule / trend webhook / Bright Data snapshot)
 - **`{ "mode": "run" }`** — scheduled or trend-driven. Optional `"trend": <TrendDetected payload>` carries correlation/causation for enrichment (RAZ-26). Runs `api`/`rss` catalog sources subscribed via `page_material_sources`.
 - **`{ "mode": "ingest", "source": "reference_harvest", "pages": ["p1"], "items": [ ...raw... ], "trigger": null }`** — n8n hands in already-fetched raw items (Bright Data reference harvest RAZ-36, scrape-mode articles RAZ-25). Function only normalizes → dedup → emit.
 - **`{ "mode": "search", "keyword": "...", "sink": "events"|"manual", "sources": [...], "pages": [...], "ai_assist": bool }`** — keyword fan-out. `sink="events"` = autonomous, dedups + fans out + writes `source_events` (RAZ-26). `sink="manual"` = isolated store `manual_search_results`, **no dedup, no fan-out, never source_events** (RAZ-37). Omit `sources` and only cheap in-function sources run; Bright Data must be named explicitly.
+- **`{ "mode": "harvest_plan", "scope": "daily"|"all", "ref_ids": [1,2], "pages": [...] }`** — READ-ONLY, writes nothing (RAZ-36). Returns `{ jobs, skipped, refs_considered }`.
+
+## harvest_plan — why it exists
+
+n8n **cannot read `sources.json`**: it's bundled into this function. But the harvest needs `dataset_id` + `discover_by` per platform. Rather than duplicate ids into n8n (breaks *config is data, not code*) or make n8n join ref-rows against the catalog (logic in the orchestrator — a CLAUDE.md smell), the function does the join and hands n8n **ready-to-execute jobs**: `trigger_url` fully formed, `inputs` built, `page_id` to ingest back to. n8n holds zero config and makes zero decisions; it only does the slow async I/O n8n is actually for.
+
+Each job carries `strategy`/`window_days`/`cap` and a `strategy_supported` flag. `cap` merges into the scraper's post-count input when it declares one (e.g. Facebook's `num_of_posts`). **`best_performing` is not implemented** — those refs still scrape, but engagement-ranking over `window_days` isn't built, so `strategy_supported` is `false`. Only `latest_n` is honoured today.
+
+`skipped` is returned, never swallowed: a ref with no catalog source, a disabled source, an unset `dataset_id`, or a `ref_url` that isn't a URL shows up there with a reason.
+
+Gating matches the material path — a ref only harvests if its page has `page_source_settings.sources_enabled = true`.
 
 ## Layout
 
