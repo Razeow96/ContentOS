@@ -21,7 +21,7 @@ const state = {
   rows: [],           // page_trend_sources
   gates: [],          // page_trend_settings
   trends: [],
-  hasCampaign: false,
+  hasCampaign: null,   // null = not probed yet; probed once per session
   editing: null,      // campaign being edited
 };
 
@@ -31,18 +31,53 @@ const $ = (sel) => document.querySelector(sel);
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+let toastTimer = null;
 function toast(msg, bad) {
   const t = $("#toast");
   t.textContent = msg;
   t.className = "toast" + (bad ? " bad" : "");
-  setTimeout(() => t.classList.add("hidden"), 3800);
+  clearTimeout(toastTimer); // a stale timer from an earlier toast must not hide this one
+  toastTimer = setTimeout(() => t.classList.add("hidden"), 3800);
+}
+
+// Shared request core: fetch with the auth headers, read text, tolerant-parse JSON.
+// db() and fn() layer their own error semantics on top of the same pipeline.
+async function http(url, opts = {}) {
+  const res = await fetch(url, { ...opts, headers: { ...HEAD, ...(opts.headers || {}) } });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* non-JSON body */ }
+  return { res, text, json };
 }
 
 async function db(path, opts = {}) {
-  const res = await fetch(REST + path, { ...opts, headers: { ...HEAD, ...(opts.headers || {}) } });
-  const text = await res.text();
+  const { res, text, json } = await http(REST + path, opts);
   if (!res.ok) throw new Error(text || res.status);
-  return text ? JSON.parse(text) : null;
+  return json;
+}
+
+const fmtTs = (ts, from = 0, to = 16) => String(ts || "").slice(from, to).replace("T", " ");
+
+// Table shell with the empty-state fallback; colspan derived from the headers so it
+// can never drift when a column is added. A header is a string or {h, w}.
+function table(cols, rowsHtml, empty) {
+  const ths = cols.map((c) => (typeof c === "string" ? `<th>${c}</th>` : `<th style="width:${c.w}">${c.h}</th>`)).join("");
+  return `<div class="tablewrap"><table>
+    <tr>${ths}</tr>
+    ${rowsHtml || `<tr><td colspan="${cols.length}" class="empty">${empty || ""}</td></tr>`}
+  </table></div>`;
+}
+
+// The two catalog JSONs are static per session (they change on edit/deploy, not at
+// runtime) — fetch each once and cache; reload the page to pick up a new deploy.
+const catalogCache = new Map();
+async function loadCatalog(path) {
+  if (!catalogCache.has(path)) {
+    const res = await fetch(path);
+    if (!res.ok) throw new Error("catalog fetch " + res.status);
+    catalogCache.set(path, await res.json());
+  }
+  return catalogCache.get(path);
 }
 
 function banner(html, bad) {
@@ -92,13 +127,11 @@ async function detectCampaign() {
 }
 
 async function loadAll() {
-  const cat = await fetch(TREND_CATALOG).then((r) => {
-    if (!r.ok) throw new Error("catalog fetch " + r.status);
-    return r.json();
-  });
+  const cat = await loadCatalog(TREND_CATALOG);
   state.sources = (cat.sources || []).filter((s) => s && s.enabled && s.name);
 
-  state.hasCampaign = await detectCampaign();
+  // The schema can't change mid-session — probe once, not on every refresh.
+  if (state.hasCampaign === null) state.hasCampaign = await detectCampaign();
   const sel = state.hasCampaign ? "*" : "id,page_id,source_name,region,language,country,category,keywords,chart,max_results,enabled";
   const [rows, gates, trends] = await Promise.all([
     db("/page_trend_sources?select=" + sel + "&order=id.asc"),
@@ -133,19 +166,20 @@ function renderTrend() {
   html += `<div class="card">
     <h2>Pages &amp; gates</h2>
     <p class="hint">A page only pulls trends when <span class="mono">trends_enabled</span> is on. This is the master switch — source rows below are ignored while it is off.</p>
-    <div class="tablewrap"><table>
-      <tr><th>Page</th><th>trends_enabled</th><th>Source rows</th></tr>
-      ${
-    state.gates.map((g) => {
-      const n = state.rows.filter((r) => r.page_id === g.page_id).length;
-      return `<tr>
+    ${
+    table(
+      ["Page", "trends_enabled", "Source rows"],
+      state.gates.map((g) => {
+        const n = state.rows.filter((r) => r.page_id === g.page_id).length;
+        return `<tr>
             <td class="mono">${esc(g.page_id)}</td>
             <td><input type="checkbox" class="switch" data-gate="${esc(g.page_id)}" ${g.trends_enabled ? "checked" : ""}></td>
             <td>${n}</td>
           </tr>`;
-    }).join("") || `<tr><td colspan="3" class="empty">No pages in page_trend_settings.</td></tr>`
+      }).join(""),
+      "No pages in page_trend_settings.",
+    )
   }
-    </table></div>
     <div class="row" style="margin-top:12px">
       <input type="text" id="newpage" placeholder="new page_id">
       <button class="btn ghost" id="addpage">Add page</button>
@@ -162,7 +196,6 @@ function renderTrend() {
 
   for (const [name, rows] of groups) {
     const ungrouped = name === "__ungrouped__";
-    const src = state.sources.find((s) => s.name === rows[0].source_name);
     html += `<div style="margin-bottom:14px">
       <div class="spread">
         <div>
@@ -179,25 +212,24 @@ function renderTrend() {
         </div>
       </div>
       ${ungrouped ? `<p class="hint">Rows created before campaigns existed. Editing them here would guess at grouping, so they are listed read-only — assign a campaign by editing the row's <span class="mono">campaign</span> column, or rebuild them as a campaign.</p>` : ""}
-      <div class="tablewrap"><table>
-        <tr><th>Page</th><th>Platform</th><th>Settings</th><th>Enabled</th></tr>
-        ${
-      rows.map((r) => {
-        const s = state.sources.find((x) => x.name === r.source_name);
-        const cells = s
-          ? usedCols(s).map((c) => `${c}=${esc(r[c] ?? "—")}`).join(" · ")
-          : `<span class="tag warn">unknown/disabled source</span>`;
-        return `<tr>
+      ${
+      table(
+        ["Page", "Platform", "Settings", "Enabled"],
+        rows.map((r) => {
+          const s = state.sources.find((x) => x.name === r.source_name);
+          const cells = s
+            ? usedCols(s).map((c) => `${c}=${esc(r[c] ?? "—")}`).join(" · ")
+            : `<span class="tag warn">unknown/disabled source</span>`;
+          return `<tr>
               <td class="mono">${esc(r.page_id)}</td>
               <td class="mono">${esc(r.source_name)}</td>
               <td class="mono">${cells}</td>
               <td><input type="checkbox" class="switch" data-row="${r.id}" ${r.enabled ? "checked" : ""}></td>
             </tr>`;
-      }).join("")
+        }).join(""),
+      )
     }
-      </table></div>
     </div>`;
-    void src;
   }
   html += `</div>`;
 
@@ -212,7 +244,7 @@ function renderTrend() {
     state.trends.length
       ? state.trends.map((t) => `<div class="feeditem">
             <div>${esc(t.topic)}</div>
-            <div class="feedmeta mono">${esc(t.source)} · ${esc(t.region ?? "—")} · ${esc(t.timeframe ?? "—")} · ${esc((t.detected_at || "").slice(0, 16).replace("T", " "))}</div>
+            <div class="feedmeta mono">${esc(t.source)} · ${esc(t.region ?? "—")} · ${esc(t.timeframe ?? "—")} · ${esc(fmtTs(t.detected_at))}</div>
           </div>`).join("")
       : `<p class="empty">No trends detected yet. M1's daily trigger is intentionally inactive until M2 has a live consumer.</p>`
   }
@@ -223,41 +255,42 @@ function renderTrend() {
   if (state.editing !== null) renderEditor();
 }
 
-function wireTrend() {
-  document.querySelectorAll("[data-gate]").forEach((el) =>
-    el.addEventListener("change", async () => {
-      const page = el.dataset.gate;
-      try {
-        await db("/page_trend_settings?page_id=eq." + encodeURIComponent(page), {
-          method: "PATCH",
-          body: JSON.stringify({ trends_enabled: el.checked }),
-        });
-        const g = state.gates.find((x) => x.page_id === page);
-        if (g) g.trends_enabled = el.checked;
-        toast(`${page}: trends ${el.checked ? "enabled" : "disabled"}`);
-      } catch (e) {
-        el.checked = !el.checked;
-        toast("Gate update failed: " + e.message, true);
-      }
-    })
-  );
-
-  document.querySelectorAll("[data-row]").forEach((el) =>
+// One optimistic-toggle pattern for every switch: run the PATCH+state-sync, and on
+// failure revert the checkbox and toast — so the rollback logic exists exactly once.
+function wireSwitch(attr, apply) {
+  document.querySelectorAll(`[${attr}]`).forEach((el) =>
     el.addEventListener("change", async () => {
       try {
-        await db("/page_trend_sources?id=eq." + el.dataset.row, {
-          method: "PATCH",
-          body: JSON.stringify({ enabled: el.checked }),
-        });
-        const r = state.rows.find((x) => String(x.id) === el.dataset.row);
-        if (r) r.enabled = el.checked;
-        toast("Row " + (el.checked ? "enabled" : "disabled"));
+        await apply(el);
       } catch (e) {
         el.checked = !el.checked;
         toast("Update failed: " + e.message, true);
       }
     })
   );
+}
+
+function wireTrend() {
+  wireSwitch("data-gate", async (el) => {
+    const page = el.dataset.gate;
+    await db("/page_trend_settings?page_id=eq." + encodeURIComponent(page), {
+      method: "PATCH",
+      body: JSON.stringify({ trends_enabled: el.checked }),
+    });
+    const g = state.gates.find((x) => x.page_id === page);
+    if (g) g.trends_enabled = el.checked;
+    toast(`${page}: trends ${el.checked ? "enabled" : "disabled"}`);
+  });
+
+  wireSwitch("data-row", async (el) => {
+    await db("/page_trend_sources?id=eq." + el.dataset.row, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: el.checked }),
+    });
+    const r = state.rows.find((x) => String(x.id) === el.dataset.row);
+    if (r) r.enabled = el.checked;
+    toast("Row " + (el.checked ? "enabled" : "disabled"));
+  });
 
   $("#addpage")?.addEventListener("click", async () => {
     const id = $("#newpage").value.trim();
@@ -344,14 +377,8 @@ function renderEditor() {
     </div>
 
     <div class="row" style="margin-bottom:6px">${fields}</div>
-    ${
-    dead.length
-      ? `<p class="hint">Not used by <span class="mono">${esc(src.name)}</span>: <span class="mono">${dead.join(", ")}</span>.
-           ${dead.includes("category") || dead.includes("keywords")
-        ? `M1 fills <span class="mono">category</span>/<span class="mono">keywords</span> from the platform's own response, so those columns are dead config for every source.`
-        : ""}</p>`
-      : ""
-  }
+    <p class="hint">Not used by <span class="mono">${esc(src.name)}</span>: <span class="mono">${dead.join(", ")}</span>.
+      M1 fills <span class="mono">category</span>/<span class="mono">keywords</span> from the platform's own response, so those columns are dead config for every source.</p>
 
     <h2 style="margin-top:16px">Pages</h2>
     <p class="hint">One row per ticked page. Pages with the gate off still get a row, but M1 skips them until the gate is on.</p>
@@ -393,12 +420,14 @@ function renderEditor() {
 
 async function saveCampaign() {
   const e = state.editing;
+  if (e.saving) return; // a double-click must not interleave two replace sequences
   const name = (e.isNew ? $("#cname").value : e.name).trim();
   if (!name) return toast("Campaign needs a name", true);
   if (!e.pages.length) return toast("Tick at least one page", true);
   if (e.isNew && state.rows.some((r) => r.campaign === name)) return toast("That campaign name already exists", true);
 
   const src = state.sources.find((s) => s.name === e.source_name);
+  if (!src) return toast(`Source "${e.source_name}" is no longer in the catalog — pick a platform again`, true);
   const rows = e.pages.map((p) => {
     const row = { page_id: p, source_name: e.source_name, campaign: name, enabled: true };
     for (const c of usedCols(src)) {
@@ -409,42 +438,69 @@ async function saveCampaign() {
     return row;
   });
 
+  e.saving = true;
+  const btn = $("#save");
+  if (btn) btn.disabled = true;
   try {
-    // Replace the campaign wholesale: config rows carry no state worth preserving,
-    // and this keeps "what you see is what is stored" literally true.
-    await db("/page_trend_sources?campaign=eq." + encodeURIComponent(name), { method: "DELETE" });
-    await db("/page_trend_sources", { method: "POST", body: JSON.stringify(rows) });
+    // Replace the campaign wholesale, but INSERT-FIRST: write the new rows, then delete
+    // only the stale ones by id. The old DELETE-then-POST order destroyed the campaign
+    // whenever the POST failed; this order's worst failure mode is visible duplicates
+    // (delete failed after insert), never a wiped campaign.
+    const inserted = await db("/page_trend_sources", {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(rows),
+    });
+    const keep = (inserted || []).map((r) => r.id);
+    if (!keep.length) throw new Error("insert returned no rows — old rows left untouched");
+    await db(`/page_trend_sources?campaign=eq.${encodeURIComponent(name)}&id=not.in.(${keep.join(",")})`, {
+      method: "DELETE",
+    });
     toast(`Campaign "${name}" saved — ${rows.length} row(s)`);
     state.editing = null;
     await refresh();
   } catch (err) {
     toast("Save failed: " + err.message, true);
+  } finally {
+    e.saving = false;
+    if (btn) btn.disabled = false;
   }
 }
 
 /* ---------------- infrastructure screen (M0 rate-limit audit) ---------------- */
 
-const infra = { provider: "", deniedOnly: false, timer: null };
+const infra = { provider: "", deniedOnly: false, seq: 0, limits: null, counters: null };
 
-async function renderInfra() {
+// reuseBudgets=true (filter changes): only the ledger query depends on the filters, so
+// budgets/counters are reused from the last full load instead of refetched.
+async function renderInfra(reuseBudgets) {
+  // Stale-response guard: only the newest invocation may paint, and only while the
+  // Infrastructure screen is still the active one.
+  const seq = ++infra.seq;
+  const stale = () => seq !== infra.seq || state.screen !== "infra";
   const day = new Date().toISOString().slice(0, 10);
-  let limits = [], counters = [], log = [];
+  let log = [];
   try {
-    [limits, counters] = await Promise.all([
-      db("/api_rate_limits?select=*&order=provider.asc"),
-      db(`/api_usage_counters?select=*&day=eq.${day}`),
-    ]);
+    if (!reuseBudgets || !infra.limits) {
+      [infra.limits, infra.counters] = await Promise.all([
+        db("/api_rate_limits?select=*&order=provider.asc"),
+        db(`/api_usage_counters?select=*&day=eq.${day}`),
+      ]);
+    }
     let q = `/api_request_log?select=*&order=requested_at.desc&limit=100`;
     if (infra.provider) q += `&provider=eq.${encodeURIComponent(infra.provider)}`;
     if (infra.deniedOnly) q += `&allowed=eq.false`;
     log = await db(q);
   } catch (e) {
+    if (stale()) return;
     return ($("#screen").innerHTML = `<h1>Infrastructure</h1>
       <div class="card"><h2>Rate-limit tables missing</h2>
       <p class="hint">Run <span class="mono">supabase/database/20260716_m0_rate_limit.sql</span> — until then every third-party call is denied (fail-closed by design).</p>
       <p class="hint mono">${esc(e.message).slice(0, 200)}</p></div>`);
   }
+  if (stale()) return;
 
+  const limits = infra.limits, counters = infra.counters;
   const cnt = Object.fromEntries(counters.map((c) => [c.provider, c]));
   const bar = (used, max) => {
     if (max === null || max === undefined) return `<span class="tag">no cap</span>`;
@@ -461,16 +517,19 @@ async function renderInfra() {
     <div class="card">
       <h2>Today's budgets</h2>
       <p class="hint">From <span class="mono">api_rate_limits</span> (config = data; edit rows to change budgets). A provider with no row is denied.</p>
-      <div class="tablewrap"><table>
-        <tr><th>Provider</th><th>Requests</th><th>Records</th><th>Enabled</th></tr>
-        ${limits.map((l) => {
+      ${
+      table(
+        ["Provider", "Requests", "Records", "Enabled"],
+        limits.map((l) => {
           const c = cnt[l.provider] || { requests: 0, records: 0 };
           return `<tr><td class="mono">${esc(l.provider)}</td>
             <td>${bar(c.requests, l.max_requests_per_day)}</td>
             <td>${bar(c.records, l.max_records_per_day)}</td>
             <td><span class="tag ${l.enabled ? "on" : "off"}">${l.enabled ? "on" : "off"}</span></td></tr>`;
-        }).join("") || `<tr><td colspan="4" class="empty">No budgets configured.</td></tr>`}
-      </table></div>
+        }).join(""),
+        "No budgets configured.",
+      )
+    }
     </div>
 
     <div class="card">
@@ -483,10 +542,11 @@ async function renderInfra() {
           <button class="btn ghost" id="ifrefresh">Refresh</button>
         </div>
       </div>
-      <div class="tablewrap"><table>
-        <tr><th>When (UTC)</th><th>Provider</th><th>Method</th><th>OK</th><th>Status</th><th>Recs</th><th>ms</th><th>URL / deny reason</th></tr>
-        ${log.map((r) => `<tr>
-            <td class="mono">${esc((r.requested_at || "").slice(5, 19).replace("T", " "))}</td>
+      ${
+      table(
+        ["When (UTC)", "Provider", "Method", "OK", "Status", "Recs", "ms", "URL / deny reason"],
+        log.map((r) => `<tr>
+            <td class="mono">${esc(fmtTs(r.requested_at, 5, 19))}</td>
             <td class="mono">${esc(r.provider)}</td>
             <td class="mono">${esc(r.method)}</td>
             <td><span class="tag ${r.allowed ? "on" : "warn"}">${r.allowed ? "✓" : "DENIED"}</span></td>
@@ -494,13 +554,15 @@ async function renderInfra() {
             <td class="mono">${r.records ?? r.estimated_records ?? "—"}</td>
             <td class="mono">${r.duration_ms ?? "—"}</td>
             <td class="mono" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.deny_reason || r.url || "")}</td>
-          </tr>`).join("") || `<tr><td colspan="8" class="empty">No requests logged yet.</td></tr>`}
-      </table></div>
+          </tr>`).join(""),
+        "No requests logged yet.",
+      )
+    }
     </div>`;
 
-  $("#ifprov").addEventListener("change", (e) => { infra.provider = e.target.value; renderInfra(); });
-  $("#ifdenied").addEventListener("change", (e) => { infra.deniedOnly = e.target.checked; renderInfra(); });
-  $("#ifrefresh").addEventListener("click", renderInfra);
+  $("#ifprov").addEventListener("change", (e) => { infra.provider = e.target.value; renderInfra(true); });
+  $("#ifdenied").addEventListener("change", (e) => { infra.deniedOnly = e.target.checked; renderInfra(true); });
+  $("#ifrefresh").addEventListener("click", () => renderInfra());
 }
 
 /* ---------------- source screen (RAZ-40 · manual search + review · RAZ-37) ----------------
@@ -520,7 +582,8 @@ const src = {
   videoType: "",     // "" = both | "Video" | "Shorts"
   keyword: "",
   aiAssist: false,
-  busy: false,
+  busy: false,       // search in flight
+  opBusy: false,     // promote/discard in flight — a double-click would double-emit events
   queue: [],         // manual_search_results status=new
   chosen: new Set(), // queue row ids ticked in panel B
   pages: [],         // page_source_settings
@@ -529,24 +592,22 @@ const src = {
 };
 
 async function fn(body) {
-  const res = await fetch(FN, { method: "POST", headers: HEAD, body: JSON.stringify(body) });
-  const text = await res.text();
-  let json = null;
-  try { json = JSON.parse(text); } catch { /* non-JSON error body */ }
-  if (!res.ok && !json) throw new Error(`${res.status}: ${text.slice(0, 200)}`);
-  if (json && json.ok === false && json.error) throw new Error(json.error);
+  const { res, text, json } = await http(FN, { method: "POST", body: JSON.stringify(body) });
+  // A 2xx that isn't JSON is a broken proxy/gateway, not a success — never return null
+  // (callers dereference the result immediately).
+  if (!json) throw new Error(`${res.status}: ${(text || "empty response").slice(0, 200)}`);
+  if (json.ok === false && json.error) throw new Error(json.error);
   return json;
 }
 
-// A source is ASYNC when it is a Bright Data discover job — those cannot answer inside the
-// function's sync budget (measured: 112.6s, 0 records) and must go via search_plan -> n8n.
-const isAsync = (s) => s.bd_input === "search_filters";
+// A source is ASYNC when it is a Bright Data keyword-DISCOVERY job — the same predicate
+// the backend's buildSearchPlan uses (type=brightdata + bd_input=keyword). Discovery
+// cannot answer inside the function's sync budget (measured: 112.6s, 0 records) and
+// must go via search_plan -> n8n.
+const isAsync = (s) => s.type === "brightdata" && s.bd_input === "keyword";
 
 async function loadSource() {
-  const cat = await fetch(SOURCE_CATALOG).then((r) => {
-    if (!r.ok) throw new Error("catalog fetch " + r.status);
-    return r.json();
-  });
+  const cat = await loadCatalog(SOURCE_CATALOG);
   // The DEPLOYED catalog is the truth — never a second copy of the source list here.
   src.catalog = (cat.sources || []).filter((s) => s && s.name && s.enabled && s.search === true);
   const [queue, pages] = await Promise.all([
@@ -621,9 +682,10 @@ function renderSource() {
       </div>
       <p class="hint">Promote emits a real SourceEnriched into <span class="mono">source_events</span> (fresh correlation_id, causation_id null) and flips the row to <span class="mono">promoted</span> — the only bridge out of this store. Discard keeps the row as a record of what you rejected; it emits nothing.</p>
       ${byKw.size ? `<p class="hint">${[...byKw].map(([k, n]) => `<span class="tag">${esc(k)} · ${n}</span>`).join(" ")}</p>` : ""}
-      <div class="tablewrap"><table>
-        <tr><th style="width:28px"><input type="checkbox" id="sall"></th><th>Title</th><th>Source</th><th>Engagement</th><th>Found</th><th>Link</th></tr>
-        ${q.map((r) => {
+      ${
+      table(
+        [{ h: '<input type="checkbox" id="sall">', w: "28px" }, "Title", "Source", "Engagement", "Found", "Link"],
+        q.map((r) => {
           const p = r.payload || {};
           const e = p.engagement || null;
           const eng = e ? Object.entries(e).filter(([, v]) => v !== null && v !== undefined).map(([k, v]) => `${k[0]}:${v}`).join(" ") : "—";
@@ -632,11 +694,13 @@ function renderSource() {
             <td>${p.image_url ? `<img src="${esc(p.image_url)}" alt="" style="width:46px;height:26px;object-fit:cover;border-radius:3px;vertical-align:middle;margin-right:8px">` : ""}${esc(String(p.title || "").slice(0, 78))}</td>
             <td class="mono">${esc(r.source)}${p.kind ? ` <span class="tag">${esc(p.kind)}</span>` : ""}</td>
             <td class="mono">${esc(eng)}</td>
-            <td class="mono">${esc((r.searched_at || "").slice(5, 16).replace("T", " "))}</td>
+            <td class="mono">${esc(fmtTs(r.searched_at, 5, 16))}</td>
             <td>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">open</a>` : "—"}</td>
           </tr>`;
-        }).join("") || `<tr><td colspan="6" class="empty">Nothing waiting. Search above — results land here.</td></tr>`}
-      </table></div>
+        }).join(""),
+        "Nothing waiting. Search above — results land here.",
+      )
+    }
     </div>`;
 
   /* --- panel A wiring --- */
@@ -647,27 +711,46 @@ function renderSource() {
   document.querySelectorAll(".srcpick").forEach((c) =>
     c.addEventListener("change", (e) => {
       e.target.checked ? src.picked.add(e.target.value) : src.picked.delete(e.target.value);
-      renderSource(); // the video-type toggle only exists while an async source is picked
+      // Full re-render only when the video-type row must appear/disappear — a plain
+      // tick otherwise rebuilt the whole screen (and its 200-row queue) per click.
+      const wantToggle = [...src.picked].some((n) => disc.some((d) => d.name === n));
+      if (wantToggle !== !!$("#svt")) renderSource();
     })
   );
   $("#sgo").addEventListener("click", runSearch);
 
   /* --- panel B wiring --- */
+  const syncQueueButtons = () => {
+    const p = $("#spromote"), d = $("#sdiscard");
+    if (p) {
+      p.disabled = !(src.chosen.size && src.promoteTo) || src.opBusy;
+      p.textContent = "Promote" + (src.chosen.size ? " " + src.chosen.size : "");
+    }
+    if (d) d.disabled = !src.chosen.size || src.opBusy;
+  };
   $("#sall").addEventListener("change", (e) => {
     src.chosen = e.target.checked ? new Set(q.map((r) => r.id)) : new Set();
-    renderSource();
+    document.querySelectorAll(".qpick").forEach((c) => (c.checked = e.target.checked));
+    syncQueueButtons();
   });
   document.querySelectorAll(".qpick").forEach((c) =>
     c.addEventListener("change", (e) => {
       const id = Number(e.target.value);
       e.target.checked ? src.chosen.add(id) : src.chosen.delete(id);
-      renderSource();
+      syncQueueButtons();
     })
   );
-  $("#spage").addEventListener("change", (e) => { src.promoteTo = e.target.value; });
+  $("#spage").addEventListener("change", (e) => { src.promoteTo = e.target.value; syncQueueButtons(); });
   $("#spromote").addEventListener("click", doPromote);
   $("#sdiscard").addEventListener("click", doDiscard);
-  $("#srefresh").addEventListener("click", async () => { await loadSource(); renderSource(); });
+  $("#srefresh").addEventListener("click", () => refreshSource().catch((e) => toast("Refresh failed: " + e.message, true)));
+}
+
+// Reload the source-screen data and repaint — but only if the operator is still ON the
+// source screen; a slow response must never repaint over another screen.
+async function refreshSource() {
+  await loadSource();
+  if (state.screen === "source") renderSource();
 }
 
 async function runSearch() {
@@ -696,16 +779,22 @@ async function runSearch() {
       });
       const jobs = plan.jobs || [];
       let fired = 0;
-      for (const job of jobs) {
-        try {
-          // Fire-and-forget: the worker responds immediately, results land minutes later.
-          await fetch(CFG.HARVEST_WORKER_URL, {
+      if (!CFG.HARVEST_WORKER_URL) {
+        notes.push("async skipped: HARVEST_WORKER_URL is not set in config.js");
+      } else {
+        // Independent fire-and-forget POSTs — dispatch concurrently. A non-2xx (e.g. a
+        // 404 from an inactive worker workflow) is a FAILED dispatch, not a success.
+        const results = await Promise.allSettled(jobs.map((job) =>
+          fetch(CFG.HARVEST_WORKER_URL, {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(job),
-          });
-          fired++;
-        } catch (e) {
-          notes.push(`async dispatch failed for ${job.source}: ${e.message}`);
-        }
+          }).then((res) => {
+            if (!res.ok) throw new Error(`worker replied ${res.status} — is the n8n workflow active?`);
+          })
+        ));
+        results.forEach((r, i) => {
+          if (r.status === "fulfilled") fired++;
+          else notes.push(`async dispatch failed for ${jobs[i].source}: ${r.reason.message}`);
+        });
       }
       if (fired) notes.push(`async: ${fired} job(s) dispatched — results land in the queue in a few minutes, hit Refresh`);
       if (plan.skipped && plan.skipped.length) notes.push(`skipped: ${plan.skipped.map((s) => s.source + " (" + s.reason + ")").join(", ")}`);
@@ -717,31 +806,58 @@ async function runSearch() {
     toast("Search failed: " + e.message, true);
   } finally {
     src.busy = false;
-    await loadSource();
-    renderSource();
+    try {
+      await refreshSource();
+    } catch (e) {
+      // The search outcome is already in src.lastRun — a failed queue reload must not
+      // leave the button stuck on "Searching…" or escape as an unhandled rejection.
+      if (state.screen === "source") renderSource();
+      toast("Queue reload failed: " + e.message, true);
+    }
   }
+}
+
+// Promote/discard share one in-flight lock: a double-click on Promote fires two
+// concurrent calls that can BOTH read the rows as status=new and double-emit events
+// (the backend's status flip is not atomic with the read).
+function lockQueueButtons() {
+  const p = $("#spromote"), d = $("#sdiscard");
+  if (p) p.disabled = true;
+  if (d) d.disabled = true;
 }
 
 async function doPromote() {
   const ids = [...src.chosen];
-  if (!ids.length || !src.promoteTo) return;
+  if (!ids.length || !src.promoteTo || src.opBusy) return;
+  src.opBusy = true;
+  lockQueueButtons();
   try {
     const r = await fn({ mode: "promote", ids, pages: [src.promoteTo] });
-    // fresh < pulled means the freshness invariant deduped some — say so rather than
-    // let it look like a silent partial failure.
-    const dup = (r.material_pulled || 0) - (r.material_fresh || 0);
-    toast(`Promoted ${r.written} event(s) to ${src.promoteTo}` + (dup > 0 ? ` · ${dup} already in the stream (deduped)` : ""));
+    if (r.errors && r.errors.length) {
+      // Partial failure (HTTP 207): events may already be in the stream while the rows
+      // stayed status=new — surface it instead of toasting plain success.
+      toast(`Promoted ${r.written} event(s) — but: ${r.errors.join(" | ")}`, true);
+    } else {
+      // fresh < pulled means the freshness invariant deduped some — say so rather than
+      // let it look like a silent partial failure.
+      const dup = (r.material_pulled || 0) - (r.material_fresh || 0);
+      toast(`Promoted ${r.written} event(s) to ${src.promoteTo}` + (dup > 0 ? ` · ${dup} already in the stream (deduped)` : ""));
+    }
     src.chosen = new Set();
-    await loadSource();
-    renderSource();
+    await refreshSource();
   } catch (e) {
     toast("Promote failed: " + e.message, true);
+    if (state.screen === "source") renderSource(); // restore the buttons we locked
+  } finally {
+    src.opBusy = false;
   }
 }
 
 async function doDiscard() {
   const ids = [...src.chosen];
-  if (!ids.length) return;
+  if (!ids.length || src.opBusy) return;
+  src.opBusy = true;
+  lockQueueButtons();
   try {
     // No event, no bridge — just a status flip, so this is a plain PostgREST write.
     await db(`/manual_search_results?id=in.(${ids.join(",")})`, {
@@ -749,10 +865,12 @@ async function doDiscard() {
     });
     toast(`Discarded ${ids.length} row(s)`);
     src.chosen = new Set();
-    await loadSource();
-    renderSource();
+    await refreshSource();
   } catch (e) {
     toast("Discard failed: " + e.message, true);
+    if (state.screen === "source") renderSource();
+  } finally {
+    src.opBusy = false;
   }
 }
 
@@ -769,8 +887,12 @@ function render() {
   else if (state.screen === "infra") renderInfra();
   else {
     // Source data is loaded lazily — the trend screen is the default and must not pay
-    // for a catalog fetch + two queries it never uses.
-    loadSource().then(renderSource).catch((e) => {
+    // for a catalog fetch + two queries it never uses. Guard both outcomes on the
+    // screen still being active: a slow response must never repaint over another screen.
+    loadSource().then(() => {
+      if (state.screen === "source") renderSource();
+    }).catch((e) => {
+      if (state.screen !== "source") return;
       $("#screen").innerHTML = `<h1>Content Source</h1><div class="card"><h2>Could not load</h2>
         <p class="hint mono">${esc(e.message).slice(0, 240)}</p>
         <p class="hint">The catalog is fetched from <span class="mono">${esc(SOURCE_CATALOG)}</span> — serve from the REPO ROOT, not from inside /admin.</p></div>`;

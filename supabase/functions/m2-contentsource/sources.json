@@ -32,13 +32,13 @@
       "notes": "Keyword search (RAZ-26 + RAZ-37). Matches TITLES only — no plot/keyword search."
     },
     {
-      "name": "tmdb_watch_providers", "type": "api", "enabled": false,
+      "name": "tmdb_watch_providers", "type": "api", "enabled": true,
       "material_type": "listing", "kind": "provider", "tier": "material",
       "url": "https://api.themoviedb.org/3/movie/{movie_id}/watch/providers",
       "auth_ref": "TMDB API key", "auth_mode": "bearer",
-      "defaults": { "movie_id": "" }, "response_items_path": "results",
-      "field_map": { "title": { "const": "watch_providers" }, "external_id": "id" },
-      "notes": "SCAFFOLD (disabled, RAZ-24). Per-movie ({movie_id}) and returns results keyed by country, not an array — needs movie-driven routing, not a standalone list."
+      "defaults": {}, "response_items_path": "",
+      "field_map": {},
+      "notes": "RAZ-24 · watch-provider ENRICHMENT config, not a standalone adapter. The endpoint is per-movie ({movie_id}) and returns results keyed by COUNTRY, so it never builds its own jobs and no page subscribes to it directly. A movie sub opts in via params.with_providers=<TMDB country key, e.g. 'TW'> in page_material_sources — that value is BOTH the on-switch and the country key. Flow: run mode -> dedup -> each FRESH movie gets one guardedFetch here (enrichWatchProviders in adapters/api.ts, which reads only url/auth_ref/auth_mode from this entry; field_map/response_items_path unused) -> results[<key>] lands on the movie event as enrichment.watch_providers {region, link, flatrate, rent, buy} with provider NAMES. Region entry absent = attached with empty arrays ('checked, not streaming there' vs 'never checked'). Data is JustWatch-via-TMDB; 'link' is the attribution URL TMDB's terms ask to surface. Enrichment runs after dedup so re-runs cost zero provider calls."
     },
     {
       "name": "article_rss", "type": "rss", "enabled": true,

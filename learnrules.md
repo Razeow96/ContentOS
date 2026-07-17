@@ -23,9 +23,18 @@ note : treat linear as software documentation and project management including s
 - Two bug signatures: field 0/N populated = key doesn't exist. Field 1-distinct across N = you mapped a page/parent-level field.
 - Only write "VERIFIED" in notes with the date + sample size you actually read. Never generalise from a null.
 
+## UI / write-path rules (2026-07-17 admin review)
+- Replace-writes are INSERT-FIRST: POST the new rows, then DELETE stale by id. Delete-then-insert destroys data when the second call fails.
+- Every button that writes gets an in-flight guard. A double-click on an event-emitting action double-emits — the backend's read+flip is not atomic.
+- Every fetch checks res.ok, and a 2xx that isn't the expected shape is an error — never count a dispatch as fired, or return null for a caller to deref.
+- Read the whole response: an `errors` array on an ok-ish (207) response is a partial failure to surface, not a success.
+- After any await that ends in a repaint, re-check the screen/state is still current; `finally` must reset busy state even when the follow-up reload throws.
+- A partition over catalog entries must be exhaustive — every entry lands in a bucket or renders as unknown, never silently dropped.
+
 ## API rate-limit gate
 - EVERY outbound API call, any platform, passes through the rate-limit setup BEFORE it is configured or fired. No direct raw calls from adapters or n8n.
 - Limits are budgets, not just req/sec: paid APIs bill per RECORD — a per-provider daily record/credit budget is what would have saved the trial.
 - A job still running at timeout = the job spec is unbounded, not a slow platform. Diagnose the spec; never re-fire with a longer window.
 - Always cap discovery (limit_per_input) and always CANCEL the snapshot on giveup — providers keep collecting (and billing) after you stop polling.
 - FETCH WRAPPER APPROVAL: every outbound call in edge functions goes through guardedFetch (supabase/functions/m0-infrastructure/rate-limit). acquire() must return allowed=true or the call DOES NOT FIRE — no raw fetch() in adapters, fail-closed, unconfigured provider = denied.
+- ONE exception: the BD schema probe (deliberately-invalid payload, rejected before any crawl = free). Valid payloads NEVER go on the raw path.

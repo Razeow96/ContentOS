@@ -28,7 +28,7 @@ import { filterFresh } from "./config/dedup.ts";
 import { normalize, fanOut, applyStrategy } from "./service/normalize.ts";
 import { writeSourceEvents, writeManualResults } from "./service/writer.ts";
 import { aiMatch } from "./service/manuel_search_ai.ts";
-import { pullApi } from "./adapters/api.ts";
+import { pullApi, enrichWatchProviders } from "./adapters/api.ts";
 import { pullRss } from "./adapters/rss.ts";
 import { pullScrape } from "./adapters/scrape.ts";
 import { pullBrightData } from "./adapters/brightdata.ts";
@@ -127,6 +127,21 @@ async function process(
 
   const fresh = await filterFresh(chosen, SUPABASE_URL, SERVICE_KEY);
   sum.fresh += fresh.length;
+
+  // RAZ-24: attach streaming availability onto fresh movie material when the
+  // subscription opts in (params.with_providers = the TMDB country key, e.g. "TW").
+  // After dedup on purpose: only material that will actually be emitted costs a
+  // per-movie call. A requested-but-disabled enrichment source fails loudly — a
+  // silent skip would emit movie events that just quietly lack availability.
+  const wpRegion = job.params.with_providers;
+  if (wpRegion && job.source.material_type === "movie" && fresh.length > 0) {
+    const wp = loadCatalog().find((s) => s.name === "tmdb_watch_providers");
+    if (wp?.enabled) {
+      await enrichWatchProviders(wp, fresh, wpRegion, sum.errors);
+    } else {
+      sum.errors.push(`with_providers=${wpRegion} requested but tmdb_watch_providers is disabled`);
+    }
+  }
 
   const events = fanOut(job, fresh);
   sum.written += await writeSourceEvents(events, SUPABASE_URL, SERVICE_KEY);

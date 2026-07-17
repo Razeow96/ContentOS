@@ -18,7 +18,7 @@ Trend Intelligence · Content Sources · Content Generation · Media Production 
 ## Non-negotiable invariants
 1. **One aggregate = one domain = one append-only SQL stream table** (e.g. `trend_events`, `source_events`). One writer per stream.
 2. **Domains communicate ONLY through events.** A domain NEVER reads or writes another domain's tables. If you need another domain's data, react to its event — don't query its tables.
-3. **Push delivery, event-based.** A Supabase Database Webhook fires on INSERT into a stream table and POSTs to the subscriber. No polling/cursors.
+3. **Push delivery, event-based.** A Supabase Database Webhook fires on INSERT into a stream table and POSTs to the subscriber. No polling/cursors. (Scope: BETWEEN domains. Polling a third-party vendor that can't push — e.g. Bright Data snapshot status — is normal, and lives ONLY in the n8n Harvest Worker, never in edge functions.)
 4. **Fat, self-contained events.** The event payload carries everything a subscriber needs, so subscribers never call back into the source domain.
 5. **Idempotent consumers.** Every subscriber dedups on `event_id` (a "seen log"), because delivery is at-least-once.
 6. **Correlation & causation.** `correlation_id` is minted at the head of a flow and copied to every downstream event; `causation_id` = the event that caused this one. This is how a flow is traced across domains.
@@ -28,6 +28,7 @@ Trend Intelligence · Content Sources · Content Generation · Media Production 
 - **n8n is an orchestrator, not a logic engine.** Use it for scheduling, triggering, and status reporting only.
 - **Real logic lives in real code** — Supabase Edge Functions (Deno/TS). If a workflow is becoming many code-nodes, that's a smell: move the logic into a function.
 - **Config is data, not code.** Platform/catalog config lives in JSON files (edited in VS Code) or SQL tables — never hardcoded in logic. The code READS config; it doesn't CONTAIN it.
+- **UI renders what the backend serves; it never re-implements backend logic.** No copied predicates, enums, or column lists in the frontend — a UI-side re-derivation (a guessed `bd_input` value) silently hid 4 platforms. If the backend classifies it, the UI reads that classification or reuses the exact same rule.
 
 ## Aggregate vs reactor
 Not every domain owns state. An **aggregate** owns tables + enforces invariants (e.g. Trend owns dedup/freshness). A **reactor** is stateless: event-in → transform → event-out (e.g. Media Production). Decide which before building; getting it wrong creates a distributed monolith.
@@ -39,7 +40,7 @@ Not every domain owns state. An **aggregate** owns tables + enforces invariants 
 - `content_queue` becomes a projection fed by events; Workflow B becomes the Publishing domain.
 
 ## Definition of done (every feature)
-Migration applied · events flowing · consumers idempotent · contract + docs updated · artifacts committed to GitHub · legacy A/B/C unaffected.
+Migration applied · events flowing · consumers idempotent · contract + docs updated · artifacts in the repo working tree (committing is Raze's, on his timeline — mark Done in Linear without waiting for it) · legacy A/B/C unaffected.
 
 ## Volume / cross-source rule (learned)
 Signals from different platforms are never merged and never volume-compared (views ≠ searches ≠ likes). Store raw {value, unit, source}; relative "hotness" is a later Analytics/Learning job.
@@ -62,7 +63,7 @@ Founder and **system architect** of Content OS. Understands DDD, event-driven de
 - after explanation provide direct solution or to do list. avoid hanging unknown should the user conduct any action or not.
 
 ## Build philosophy
-- **Lean and fast.** Blitz-build; accept a feature once the logic is sound; move on. Debug/maintain only when a real problem surfaces. Do NOT push for exhaustive edge-case testing or belabored verification.
+- **Lean and fast, but proven.** Build fast — and a feature is accepted ONLY after its main path ran once for real with the result observed. That single proven run is what Done requires; never accept on "the logic is sound". No edge-case hunting beyond it; debug/maintain only when a real problem surfaces.
 - Don't over-engineer. Smallest correct change. No speculative folders, abstractions, or features not asked for.
 - if there is no action needed to be taken, no explanation needed.
 
