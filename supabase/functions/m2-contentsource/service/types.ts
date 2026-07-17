@@ -36,7 +36,10 @@ export interface MaterialSource {
   bd_sort_by_strategy?: Record<string, string>;  // e.g. { latest_n: "New", best_performing: "Top" }
   defaults: Record<string, string | null>;
   response_items_path: string;       // dot-path to the array of items ("" = response is the array)
-  field_map: Record<string, string | { const: string } | Record<string, string>>;
+  // A value is: a dot-path ("post_text") · a FALLBACK CHAIN of paths, first non-empty wins
+  // (["images.0","video_thumbnail"]) · a literal ({const}) · or a composite object
+  // ({likes:"num_likes", comments:"num_comments"}).
+  field_map: Record<string, string | string[] | { const: string } | Record<string, string>>;
   notes?: string;
 }
 
