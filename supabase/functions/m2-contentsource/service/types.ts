@@ -21,10 +21,19 @@ export interface MaterialSource {
   // Bright Data (type="brightdata") only:
   dataset_id?: string;               // gd_... scraper id from the Bright Data dashboard
   platform?: string;                 // for bd_input="url": matches page_reference_sources.platform
-  bd_input?: "prompt" | "url";       // "prompt" = AI scraper (keyword→answer); "url" = scrape ref pages
+  bd_input?: "prompt" | "url" | "search_filters"; // "prompt" = AI scraper (keyword→answer); "url" = scrape ref pages; "search_filters" = keyword discovery
   bd_url?: string;                   // bd_input="prompt": the scraper's required chat-surface url
-  bd_discover_by?: string;           // bd_input="url": discover mode (profile_url|url|...); omit = collect-by-URL
+  bd_discover_by?: string;           // discover mode (profile_url|url|search_filters|...); omit = collect-by-URL
   bd_params?: Record<string, unknown>; // extra fields merged into each Bright Data input row
+  bd_search_cap?: number;            // bd_input="search_filters": limit_per_input on the discover phase.
+                                     // search_filters declares NO num_of_posts, so this is the ONLY cap.
+  // Sort is per-SOURCE config but strategy is per-REF, so a static bd_params sort would rank
+  // best_performing refs against the wrong ordering (a reddit ref sorted "New" has ~0 upvotes
+  // to rank BY). These two make the strategy→sort mapping DATA: the param name differs per
+  // platform (reddit sort_by, youtube order_by) and so do the values, so neither may be
+  // hardcoded in config.ts. Omit both = source has no sort concept.
+  bd_sort_param?: string;                        // e.g. "sort_by" | "order_by"
+  bd_sort_by_strategy?: Record<string, string>;  // e.g. { latest_n: "New", best_performing: "Top" }
   defaults: Record<string, string | null>;
   response_items_path: string;       // dot-path to the array of items ("" = response is the array)
   field_map: Record<string, string | { const: string } | Record<string, string>>;
@@ -60,6 +69,25 @@ export interface HarvestJob {
   window_days: number | null;
   cap: number | null;
   strategy_supported: boolean; // false = scrapes, but ranking not implemented yet
+}
+
+// One unit of work handed to n8n by search_plan mode. Same contract as HarvestJob (the
+// Harvest Worker reads trigger_url/inputs/ingest_source/cap and holds no config of its own),
+// but keyword-shaped instead of ref-shaped: there is no page to harvest, so no ref_id/page_id.
+// sink+keyword ride along so the worker's ingest callback lands the results in the right
+// store without n8n knowing what a sink is.
+export interface SearchJob {
+  source: string;              // catalog entry that resolved this (e.g. bd_youtube_search)
+  ingest_source: string;       // what to POST back as mode=ingest source
+  platform: string | null;
+  dataset_id: string;
+  discover_by: string | null;
+  trigger_url: string;         // ready-to-call Bright Data /trigger URL, query params included
+  inputs: Record<string, unknown>[];
+  cap: number;
+  keyword: string;
+  sink: "events" | "manual";
+  ai_assist: boolean;
 }
 
 // One row from the page_material_sources table (per-page API-adapter subscription)

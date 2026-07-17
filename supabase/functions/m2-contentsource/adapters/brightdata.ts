@@ -64,12 +64,33 @@ async function buildInputs(
     return urls.map((u) => ({ url: u, ...extra }));
   }
 
+  // bd_input="search_filters": keyword DISCOVERY (e.g. YouTube search). One row, the
+  // keyword as the platform's search field. `type` is the video/shorts toggle and is
+  // passed straight through as Bright Data's own enum (Video|Shorts; omit = both) so the
+  // enum stays config/caller data and never becomes a translation table in here.
+  if (src.bd_input === "search_filters") {
+    if (!keyword) return [];
+    const t = String(job.params.video_type ?? "").trim();
+    return [{ keyword_search: keyword, ...(t ? { type: t } : {}), ...extra }];
+  }
+
   // bd_input="prompt" (default): AI-search scrapers — one row, the keyword as prompt.
   // Every AI scraper also declares `url` Required (the chat surface it drives, e.g.
   // https://www.perplexity.ai) — omitting it fails the scrape, so bd_url is mandatory.
   if (!keyword) return [];
   if (!src.bd_url) throw new Error(`${src.name}: bd_input=prompt needs bd_url`);
   return [{ url: src.bd_url, prompt: keyword, ...extra }];
+}
+
+// Bright Data KEEPS COLLECTING (and billing) server-side after we stop polling, so
+// abandoning a snapshot is not free — giving up REQUIRES an explicit cancel. The n8n
+// Harvest Worker has always done this (Cancel Snapshot node); this path did not, and a
+// sync-window timeout on 2026-07-17 left sd_mroih9qhfbng0pqr4 running. Best-effort: never
+// let a cancel failure mask the original error.
+async function cancelSnapshot(id: string, key: string): Promise<void> {
+  try {
+    await guardedFetch(`${BD_BASE}/snapshot/${id}/cancel`, { method: "POST", headers: auth(key) });
+  } catch { /* ignore — the caller is already throwing */ }
 }
 
 // Async fallback: poll a snapshot to completion, then download its records.
@@ -88,7 +109,11 @@ async function pollSnapshot(id: string, key: string, deadline: number): Promise<
     }
     if (status === "failed") throw new Error(`Bright Data snapshot ${id} failed`);
   }
-  throw new Error("Bright Data scrape exceeded the sync window (move this source to async harvest)");
+  // Out of budget: cancel before throwing, or it collects on our dime unobserved.
+  await cancelSnapshot(id, key);
+  throw new Error(
+    `Bright Data scrape exceeded the sync window (snapshot ${id} cancelled; move this source to async harvest)`,
+  );
 }
 
 export async function pullBrightData(
@@ -102,11 +127,17 @@ export async function pullBrightData(
   if (!src.dataset_id || src.dataset_id.startsWith("gd_REPLACE")) {
     throw new Error(`${src.name}: dataset_id not set — paste it from the Bright Data dashboard`);
   }
-  // Social scrapers (bd_input=url) reliably run past the sync window (proven: FB > 110s).
-  // They belong on the async harvest path (n8n trigger→snapshot→ingest), not sync search.
-  // AI-search scrapers (bd_input=prompt) return a single answer fast and DO run here.
-  if (src.bd_input === "url") {
-    throw new Error(`${src.name}: social scraping is async-only — use the n8n harvest→ingest path, not sync search`);
+  // DISCOVER jobs are async-only. Bright Data's own guidance: discovery tasks must run via
+  // POST /datasets/v3/trigger and can take several minutes; sync /scrape has a ~1min budget.
+  // Measured 2026-07-17: bd_input=url channel discover ~4min; bd_input=search_filters keyword
+  // discover 112.6s with dataset_size STILL 0 (nothing collected). Both belong on the async
+  // n8n path (search_plan/harvest_plan → trigger → poll → download → ingest).
+  // Only bd_input=prompt (AI-search: one prompt → one answer, 19–78s proven) runs here.
+  if (src.bd_input === "url" || src.bd_input === "search_filters") {
+    throw new Error(
+      `${src.name}: ${src.bd_input} is a DISCOVER job and is async-only — use the n8n ` +
+        `${src.bd_input === "url" ? "harvest_plan" : "search_plan"}→worker→ingest path, not sync search`,
+    );
   }
 
   const keyword = String(job.params.query ?? "").trim();
@@ -114,18 +145,33 @@ export async function pullBrightData(
   if (inputs.length === 0) return []; // nothing to scrape (e.g. no ref pages for this platform)
 
   const deadline = Date.now() + TIMEOUT_MS;
+
+  // /scrape accepts discover params (probe-confirmed 2026-07-17: it echoes the discover
+  // input schema rather than rejecting the endpoint). A discover job MUST be capped —
+  // uncapped it crawls open-endedly and bills per record — and search_filters declares no
+  // num_of_posts, so limit_per_input is the only cap that exists.
+  let scrapeUrl = `${BD_BASE}/scrape?dataset_id=${encodeURIComponent(src.dataset_id)}` +
+    `&format=json&notify=false&include_errors=true`;
+  let estimatedRecords = inputs.length;               // prompt scrapers: one answer per row
+  if (src.bd_discover_by) {
+    const cap = src.bd_search_cap ?? 10;
+    scrapeUrl += `&type=discover_new&discover_by=${encodeURIComponent(src.bd_discover_by)}` +
+      `&limit_per_input=${cap}`;
+    estimatedRecords = inputs.length * cap;           // discover: up to cap records PER input
+  }
+
   // Body envelope is {"input":[...]} — the bare array the /trigger endpoint takes is
   // NOT what /scrape expects (confirmed against every scraper's own code example).
-  // estimatedRecords = inputs.length (one answer per prompt); charged up-front on
-  // the record budget and reconciled by done() with the actual count.
+  // estimatedRecords is charged up-front on the record budget and reconciled by done()
+  // with the actual count.
   const { res, done } = await guardedFetch(
-    `${BD_BASE}/scrape?dataset_id=${encodeURIComponent(src.dataset_id)}&format=json&notify=false&include_errors=true`,
+    scrapeUrl,
     {
       method: "POST",
       headers: { ...auth(brightKey), "Content-Type": "application/json" },
       body: JSON.stringify({ input: inputs }),
     },
-    { estimatedRecords: inputs.length },
+    { estimatedRecords },
   );
   if (!res.ok) throw new Error(`Bright Data ${src.name} ${res.status}: ${(await res.text()).slice(0, 200)}`);
 

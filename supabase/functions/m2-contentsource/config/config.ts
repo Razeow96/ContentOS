@@ -1,5 +1,5 @@
 import catalogJson from "../sources.json" with { type: "json" };
-import type { MaterialSource, MaterialSubscription, MaterialJob, RefRow, HarvestJob } from "../service/types.ts";
+import type { MaterialSource, MaterialSubscription, MaterialJob, RefRow, HarvestJob, SearchJob } from "../service/types.ts";
 
 const BD_BASE = "https://api.brightdata.com/datasets/v3";
 
@@ -90,6 +90,27 @@ export function buildHarvestPlan(
     const extra: Record<string, unknown> = { ...(src.bd_params ?? {}) };
     if (r.cap && "num_of_posts" in extra) extra.num_of_posts = r.cap;
 
+    // Derive the sort from the REF's strategy. Sorting "New" while ranking by
+    // best_performing would rank brand-new posts that have no engagement yet — the
+    // ordering has to agree with what the strategy selects on. Both the param name and
+    // its values come from the catalog (see bd_sort_param/bd_sort_by_strategy), so this
+    // stays config-driven and no platform enum lives here.
+    if (src.bd_sort_param && src.bd_sort_by_strategy) {
+      const sortValue = src.bd_sort_by_strategy[r.strategy];
+      if (sortValue) {
+        extra[src.bd_sort_param] = sortValue;
+      } else {
+        // Unknown strategy = we do not know how to order it. Skip rather than silently
+        // scrape under the wrong sort and rank on it.
+        skipped.push({
+          ref_id: r.id,
+          platform: r.platform,
+          reason: `${src.name}: no sort mapped for strategy "${r.strategy}"`,
+        });
+        continue;
+      }
+    }
+
     jobs.push({
       ref_id: r.id,
       page_id: r.page_id,
@@ -171,12 +192,71 @@ export function ingestJob(
 
 // Keyword search: one job per enabled search source, {query} = keyword (URL-encoded).
 // Used by autonomous trend enrichment (sink=events) AND the manual tool (sink=manual).
+// Keyword-DISCOVERY plan (async twin of buildHarvestPlan). Bright Data discovery tasks must
+// go through POST /datasets/v3/trigger and can take minutes — sync /scrape times out with
+// nothing collected (measured 112.6s, dataset_size 0). So M2 resolves the job here and n8n
+// runs the slow trigger→poll→download→ingest loop, holding no config of its own (ADR-001).
+export function buildSearchPlan(
+  catalog: MaterialSource[],
+  keyword: string,
+  sourceNames: string[] | undefined,
+  opts: { videoType?: string | null; cap?: number | null; sink?: "events" | "manual"; aiAssist?: boolean },
+): { jobs: SearchJob[]; skipped: { source: string; reason: string }[] } {
+  const jobs: SearchJob[] = [];
+  const skipped: { source: string; reason: string }[] = [];
+
+  // Bright Data is paid + slow: OPT-IN only, exactly as buildSearchJobs treats it.
+  const candidates = catalog.filter((s) =>
+    s.type === "brightdata" && s.bd_input === "search_filters" &&
+    (sourceNames ? sourceNames.includes(s.name) : false)
+  );
+  if (sourceNames) {
+    for (const n of sourceNames) {
+      if (!candidates.some((c) => c.name === n)) skipped.push({ source: n, reason: "not a bd search_filters source" });
+    }
+  }
+
+  for (const src of candidates) {
+    if (!src.enabled) { skipped.push({ source: src.name, reason: `${src.name} disabled` }); continue; }
+    if (!src.dataset_id || src.dataset_id.startsWith("gd_REPLACE")) {
+      skipped.push({ source: src.name, reason: `${src.name} dataset_id not set` });
+      continue;
+    }
+    // The ONLY cap: search_filters declares no num_of_posts, so without limit_per_input the
+    // discover crawls open-endedly and bills per record.
+    const cap = opts.cap && opts.cap > 0 ? opts.cap : (src.bd_search_cap ?? 10);
+
+    let trigger_url = `${BD_BASE}/trigger?dataset_id=${encodeURIComponent(src.dataset_id)}` +
+      `&format=json&notify=false&include_errors=true`;
+    if (src.bd_discover_by) trigger_url += `&type=discover_new&discover_by=${encodeURIComponent(src.bd_discover_by)}`;
+    trigger_url += `&limit_per_input=${cap}`;
+
+    // video_type is Bright Data's own `type` enum (Video | Shorts); omit = both.
+    const t = String(opts.videoType ?? "").trim();
+    jobs.push({
+      source: src.name,
+      ingest_source: src.name,
+      platform: src.platform ?? null,
+      dataset_id: src.dataset_id,
+      discover_by: src.bd_discover_by ?? null,
+      trigger_url,
+      inputs: [{ keyword_search: keyword, ...(t ? { type: t } : {}), ...(src.bd_params ?? {}) }],
+      cap,
+      keyword,
+      sink: opts.sink ?? "manual",
+      ai_assist: !!opts.aiAssist,
+    });
+  }
+  return { jobs, skipped };
+}
+
 export function buildSearchJobs(
   catalog: MaterialSource[],
   keyword: string,
   sourceNames: string[] | undefined,
   pages: string[],
   trend: Record<string, unknown> | null,
+  videoType?: string | null,
 ): MaterialJob[] {
   const trig = triggerFrom(trend);
   const subscribers: MaterialSubscription[] = pages.map((p) => ({ page_id: p, source: "", params: {}, enabled: true }));
@@ -189,7 +269,9 @@ export function buildSearchJobs(
       return s.type !== "brightdata";
     })
     .map((src) => {
-      const params = { ...(src.defaults ?? {}), query: keyword };
+      // video_type is the caller's per-search video/shorts toggle (Bright Data's own enum:
+      // Video | Shorts; omit = both). Only bd_input=search_filters reads it.
+      const params = { ...(src.defaults ?? {}), query: keyword, video_type: videoType ?? null };
       return { source: src, params, url: fillUrl(src.url, params), subscribers, trigger: trig };
     });
 }

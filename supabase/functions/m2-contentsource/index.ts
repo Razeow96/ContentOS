@@ -8,6 +8,9 @@
 //   "search" — keyword fan-out across search sources ({query}=keyword). Optional AI match.
 //              sink="events" (autonomous trend enrichment, RAZ-26) or "manual"
 //              (RAZ-37 manual tool → isolated manual_search_results, no source_events).
+//   "search_plan" — READ-ONLY. Async twin of "search" for Bright Data keyword DISCOVERY,
+//              which cannot finish in the sync budget (measured 112.6s, 0 records). Hands n8n
+//              a ready-to-call /trigger job; the worker echoes sink+keyword back to "ingest".
 //   "harvest_plan" — READ-ONLY (RAZ-36). Resolves page_reference_sources against the
 //              Bright Data catalog and hands n8n ready-to-execute jobs. Writes nothing.
 //              n8n can't see sources.json (it's bundled here), so the join happens
@@ -16,7 +19,7 @@
 
 import {
   loadCatalog, loadMaterialSubs, buildMaterialJobs, ingestJob, buildSearchJobs,
-  loadRefRows, buildHarvestPlan,
+  loadRefRows, buildHarvestPlan, buildSearchPlan,
 } from "./config/config.ts";
 import { filterFresh } from "./config/dedup.ts";
 import { normalize, fanOut, applyStrategy } from "./service/normalize.ts";
@@ -31,7 +34,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 interface RunBody {
-  mode?: "run" | "ingest" | "search" | "harvest_plan";
+  mode?: "run" | "ingest" | "search" | "harvest_plan" | "search_plan";
   trend?: Record<string, unknown> | null;
   source?: string;
   pages?: string[];
@@ -42,6 +45,7 @@ interface RunBody {
   ai_assist?: boolean;
   sink?: "events" | "manual";
   sources?: string[];
+  video_type?: string | null;   // bd_input=search_filters toggle: "Video" | "Shorts" | omit = both
   // harvest_plan mode:
   scope?: "daily" | "all";
   ref_ids?: number[];
@@ -81,12 +85,34 @@ async function process(
   job: MaterialJob,
   provided: unknown[] | undefined,
   sum: Summary,
-  sel?: { strategy?: string; window_days?: number | null; cap?: number | null },
+  sel?: {
+    strategy?: string;
+    window_days?: number | null;
+    cap?: number | null;
+    sink?: "events" | "manual";
+    keyword?: string;
+    ai_assist?: boolean;
+  },
 ) {
   const items = await fetchItems(job, provided);
   const raw = normalize(job, items);
   sum.pulled += raw.length;
   sum.sources.add(job.source.name);
+
+  // sink=manual: the async search path calling back (search_plan → worker → ingest). Mirror
+  // runSearch's manual branch exactly — isolated store, no dedup, no fan-out, never
+  // source_events — so an async search behaves identically to a sync one.
+  if (sel?.sink === "manual") {
+    sum.selected += raw.length;
+    sum.written += await writeManualResults(
+      sel.keyword ?? "",
+      !!sel.ai_assist,
+      raw,
+      SUPABASE_URL,
+      SERVICE_KEY,
+    );
+    return;
+  }
 
   // RAZ-36: apply the ref's strategy before dedup, so only the chosen posts are emitted.
   const chosen = sel?.strategy ? applyStrategy(raw, sel.strategy, sel.window_days, sel.cap) : raw;
@@ -103,7 +129,7 @@ async function runSearch(body: RunBody, sum: Summary) {
   const keyword = (body.keyword ?? "").trim();
   if (!keyword) throw new Error("search mode requires a 'keyword'");
   const catalog = loadCatalog();
-  const jobs = buildSearchJobs(catalog, keyword, body.sources, body.pages ?? [], body.trend ?? null);
+  const jobs = buildSearchJobs(catalog, keyword, body.sources, body.pages ?? [], body.trend ?? null, body.video_type);
   sum.jobs = jobs.length;
 
   let raw: RawMaterial[] = [];
@@ -174,6 +200,27 @@ async function run(body: RunBody) {
 
   if (mode === "harvest_plan") return await runHarvestPlan(body);
 
+  // Read-only twin of harvest_plan for keyword DISCOVERY. Writes nothing; hands n8n a
+  // ready-to-execute /trigger job because discovery cannot finish inside the sync budget.
+  if (mode === "search_plan") {
+    const keyword = (body.keyword ?? "").trim();
+    if (!keyword) throw new Error("search_plan mode requires a 'keyword'");
+    const { jobs, skipped } = buildSearchPlan(loadCatalog(), keyword, body.sources, {
+      videoType: body.video_type,
+      cap: body.cap,
+      sink: body.sink ?? "manual",
+      aiAssist: body.ai_assist,
+    });
+    return {
+      ok: true,
+      mode: "search_plan",
+      keyword,
+      jobs,
+      skipped,          // surfaced, not swallowed — same rule as harvest_plan
+      planned_at: new Date().toISOString(),
+    };
+  }
+
   if (mode === "search") {
     await runSearch(body, sum);
   } else if (mode === "ingest") {
@@ -185,6 +232,10 @@ async function run(body: RunBody) {
         strategy: body.strategy,
         window_days: body.window_days,
         cap: body.cap,
+        // Echoed back by the worker from the search_plan job (absent on harvest = events).
+        sink: body.sink,
+        keyword: body.keyword,
+        ai_assist: body.ai_assist,
       });
     } catch (e) {
       sum.errors.push((e as Error).message);
