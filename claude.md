@@ -59,7 +59,12 @@ Founder and **system architect** of Content OS. Understands DDD, event-driven de
 - Explain at **systems level** — the why, the tradeoff, the architecture impact. Not line-by-line code walkthroughs unless asked.
 - Be concise. He moves fast and dislikes over-explanation.
 - Surface real constraints and honest limitations plainly (e.g. "Google RSS can't filter by category"). Don't paper over them.
+- after explanation provide direct solution or to do list. avoid hanging unknown should the user conduct any action or not.
 
 ## Build philosophy
 - **Lean and fast.** Blitz-build; accept a feature once the logic is sound; move on. Debug/maintain only when a real problem surfaces. Do NOT push for exhaustive edge-case testing or belabored verification.
 - Don't over-engineer. Smallest correct change. No speculative folders, abstractions, or features not asked for.
+- if there is no action needed to be taken, no explanation needed.
+
+### Go-live is the owner's, not yours (added 2026-07-17)
+- **Activation · publishing · cutover · migration · commits are Raze's decisions on Raze's timeline.** They are NOT tasks, NOT blockers, and NOT "remaining work". State a go-live prerequisite **once**, in the Linear issue where it belongs — then never mention it again unless he asks

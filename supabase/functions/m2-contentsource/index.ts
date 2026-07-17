@@ -8,6 +8,9 @@
 //   "search" — keyword fan-out across search sources ({query}=keyword). Optional AI match.
 //              sink="events" (autonomous trend enrichment, RAZ-26) or "manual"
 //              (RAZ-37 manual tool → isolated manual_search_results, no source_events).
+//   "promote" — RAZ-37. The ONLY bridge out of the isolated manual_search_results store:
+//              operator-chosen rows -> SourceEnriched -> source_events -> M3. Human-initiated,
+//              so it mints a fresh correlation_id and causation_id is null.
 //   "search_plan" — READ-ONLY. Async twin of "search" for Bright Data keyword DISCOVERY,
 //              which cannot finish in the sync budget (measured 112.6s, 0 records). Hands n8n
 //              a ready-to-call /trigger job; the worker echoes sink+keyword back to "ingest".
@@ -19,7 +22,7 @@
 
 import {
   loadCatalog, loadMaterialSubs, buildMaterialJobs, ingestJob, buildSearchJobs,
-  loadRefRows, buildHarvestPlan, buildSearchPlan,
+  loadRefRows, buildHarvestPlan, buildSearchPlan, loadArticleRows, buildArticleJobs,
 } from "./config/config.ts";
 import { filterFresh } from "./config/dedup.ts";
 import { normalize, fanOut, applyStrategy } from "./service/normalize.ts";
@@ -27,6 +30,7 @@ import { writeSourceEvents, writeManualResults } from "./service/writer.ts";
 import { aiMatch } from "./service/manuel_search_ai.ts";
 import { pullApi } from "./adapters/api.ts";
 import { pullRss } from "./adapters/rss.ts";
+import { pullScrape } from "./adapters/scrape.ts";
 import { pullBrightData } from "./adapters/brightdata.ts";
 import type { MaterialJob, RawMaterial } from "./service/types.ts";
 
@@ -34,7 +38,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 interface RunBody {
-  mode?: "run" | "ingest" | "search" | "harvest_plan" | "search_plan";
+  mode?: "run" | "ingest" | "search" | "harvest_plan" | "search_plan" | "promote";
   trend?: Record<string, unknown> | null;
   source?: string;
   pages?: string[];
@@ -46,6 +50,8 @@ interface RunBody {
   sink?: "events" | "manual";
   sources?: string[];
   video_type?: string | null;   // bd_input=search_filters toggle: "Video" | "Shorts" | omit = both
+  // promote mode:
+  ids?: number[];               // manual_search_results row ids the operator chose
   // harvest_plan mode:
   scope?: "daily" | "all";
   ref_ids?: number[];
@@ -75,6 +81,7 @@ async function fetchItems(job: MaterialJob, provided?: unknown[]): Promise<unkno
   if (provided) return provided;                 // ingest: already fetched by n8n
   if (job.source.type === "api") return await pullApi(job);
   if (job.source.type === "rss") return await pullRss(job);
+  if (job.source.type === "scrape") return await pullScrape(job);
   if (job.source.type === "brightdata") {
     return await pullBrightData(job, Deno.env.get("BRIGHTDATA_API_KEY"), SUPABASE_URL, SERVICE_KEY);
   }
@@ -127,7 +134,7 @@ async function process(
 
 async function runSearch(body: RunBody, sum: Summary) {
   const keyword = (body.keyword ?? "").trim();
-  if (!keyword) throw new Error("search mode requires a 'keyword'");
+  if (!keyword) throw new BadRequest("search mode requires a 'keyword'");
   const catalog = loadCatalog();
   const jobs = buildSearchJobs(catalog, keyword, body.sources, body.pages ?? [], body.trend ?? null, body.video_type);
   sum.jobs = jobs.length;
@@ -176,6 +183,75 @@ async function runSearch(body: RunBody, sum: Summary) {
   }
 }
 
+// RAZ-37 · promote — the ONLY bridge out of the isolated manual store.
+//
+// manual_search_results is deliberately a dead-end (a plain ops table, NOT a domain stream):
+// exploration must never auto-feed Content Generation. This is the single, explicit HUMAN step
+// that moves chosen material into the real flow: rows -> SourceEnriched -> source_events -> M3.
+//
+// correlation_id: ONE fresh id per promote call. A promotion is the HEAD of a new flow — a human
+// started it, no event caused it — so causation_id is null (unlike the trend consumer, where the
+// TrendDetected event_id is the cause).
+async function runPromote(body: RunBody, sum: Summary) {
+  const ids = body.ids ?? [];
+  if (ids.length === 0) throw new BadRequest("promote mode requires 'ids' (manual_search_results row ids)");
+  const pages = body.pages ?? [];
+  if (pages.length === 0) {
+    throw new BadRequest("promote mode requires 'pages' — promoted material must land on at least one page");
+  }
+
+  const h = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
+  // status=eq.new makes this idempotent: promoting the same row twice reads nothing the 2nd time.
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/manual_search_results?id=in.(${ids.join(",")})&status=eq.new&select=id,payload`,
+    { headers: h },
+  );
+  if (!res.ok) throw new Error(`read manual_search_results ${res.status}: ${await res.text()}`);
+  const rows = (await res.json()) as { id: number; payload: RawMaterial }[];
+
+  sum.jobs = rows.length;
+  sum.pulled = rows.length;
+  if (rows.length === 0) return; // nothing new to promote (already promoted, or bad ids)
+
+  const materials = rows.map((r) => r.payload);
+  for (const m of materials) sum.sources.add(m.source);
+  sum.selected = materials.length;
+
+  // Same freshness invariant as every other path — a promote must not duplicate material
+  // already in the stream for this window. Deduped rows are still marked promoted (the human
+  // did choose them); the summary reports the gap so it never looks like a silent failure.
+  const fresh = await filterFresh(materials, SUPABASE_URL, SERVICE_KEY);
+  sum.fresh = fresh.length;
+
+  const correlationId = crypto.randomUUID();
+  const events = fresh.flatMap((m) =>
+    pages.map((p) => ({
+      ...m,
+      page: p,
+      event_type: "SourceEnriched" as const,
+      correlation_id: correlationId,
+      causation_id: null,
+    }))
+  );
+  sum.written = await writeSourceEvents(events, SUPABASE_URL, SERVICE_KEY);
+
+  // Flip AFTER the events are safely written — if the write throws, the rows stay `new` and the
+  // operator can retry. The reverse order would lose the material with nothing in the stream.
+  const patch = await fetch(
+    `${SUPABASE_URL}/rest/v1/manual_search_results?id=in.(${rows.map((r) => r.id).join(",")})`,
+    {
+      method: "PATCH",
+      headers: { ...h, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify({ status: "promoted" }),
+    },
+  );
+  if (!patch.ok) {
+    // Events are already out — surface it rather than pretend. Re-promoting is safe: filterFresh
+    // will drop the duplicates, so a retry emits nothing new.
+    sum.errors.push(`promoted ${sum.written} event(s) but status update failed: ${patch.status}`);
+  }
+}
+
 // RAZ-36. Read-only: resolve refs + catalog into work for n8n. Writes nothing.
 async function runHarvestPlan(body: RunBody) {
   const refs = await loadRefRows(SUPABASE_URL, SERVICE_KEY, {
@@ -204,7 +280,7 @@ async function run(body: RunBody) {
   // ready-to-execute /trigger job because discovery cannot finish inside the sync budget.
   if (mode === "search_plan") {
     const keyword = (body.keyword ?? "").trim();
-    if (!keyword) throw new Error("search_plan mode requires a 'keyword'");
+    if (!keyword) throw new BadRequest("search_plan mode requires a 'keyword'");
     const { jobs, skipped } = buildSearchPlan(loadCatalog(), keyword, body.sources, {
       videoType: body.video_type,
       cap: body.cap,
@@ -221,7 +297,9 @@ async function run(body: RunBody) {
     };
   }
 
-  if (mode === "search") {
+  if (mode === "promote") {
+    await runPromote(body, sum);
+  } else if (mode === "search") {
     await runSearch(body, sum);
   } else if (mode === "ingest") {
     const catalog = loadCatalog();
@@ -242,14 +320,23 @@ async function run(body: RunBody) {
     }
   } else {
     const catalog = loadCatalog();
-    const subs = await loadMaterialSubs(SUPABASE_URL, SERVICE_KEY);
-    const jobs = buildMaterialJobs(catalog, subs, body.trend ?? null);
+    const [subs, articles] = await Promise.all([
+      loadMaterialSubs(SUPABASE_URL, SERVICE_KEY),
+      loadArticleRows(SUPABASE_URL, SERVICE_KEY),
+    ]);
+    // API/listing subscriptions + RAZ-25 article feeds. Same run, same normalize/dedup/emit —
+    // an article feed is just another material source, which is the point of the contract.
+    const jobs = [
+      ...buildMaterialJobs(catalog, subs, body.trend ?? null),
+      ...buildArticleJobs(catalog, articles, body.trend ?? null),
+    ];
     sum.jobs = jobs.length;
     for (const job of jobs) {
       try {
         await process(job, undefined, sum);
       } catch (e) {
-        sum.errors.push(`${job.source.name}: ${(e as Error).message}`);
+        // One bad feed must not kill the rest of the run.
+        sum.errors.push(`${job.source.name}${job.url ? ` (${job.url})` : ""}: ${(e as Error).message}`);
       }
     }
   }
@@ -269,7 +356,22 @@ async function run(body: RunBody) {
   };
 }
 
+// The AR-1 admin app is a BROWSER caller, so this function needs CORS or the preflight
+// fails before any request reaches us. Origin "*" is safe here: the bearer key is still
+// required, so CORS is not the access control — the key is.
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const JSON_HEADERS = { ...CORS, "Content-Type": "application/json" };
+
+// Bad INPUT is the caller's fault (400), a thrown adapter/DB error is ours (500).
+// Collapsing both into 500 made "promote without pages" look like a server crash.
+class BadRequest extends Error {}
+
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   try {
     // A body that fails to parse must NOT fall through to mode="run": that default
     // pulls every subscribed API source and writes real events, so a malformed
@@ -288,7 +390,7 @@ Deno.serve(async (req) => {
               error: `Body is not valid JSON: ${(e as Error).message}`,
               bytes_received: text.length,
             }),
-            { status: 400, headers: { "Content-Type": "application/json" } },
+            { status: 400, headers: JSON_HEADERS },
           );
         }
       }
@@ -296,12 +398,13 @@ Deno.serve(async (req) => {
     const result = await run(body);
     return new Response(JSON.stringify(result, null, 2), {
       status: result.ok ? 200 : 207,
-      headers: { "Content-Type": "application/json" },
+      headers: JSON_HEADERS,
     });
   } catch (e) {
+    const bad = e instanceof BadRequest;
     return new Response(JSON.stringify({ ok: false, error: (e as Error).message }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
+      status: bad ? 400 : 500,
+      headers: JSON_HEADERS,
     });
   }
 });

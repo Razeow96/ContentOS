@@ -503,16 +503,257 @@ async function renderInfra() {
   $("#ifrefresh").addEventListener("click", renderInfra);
 }
 
-/* ---------------- source screen (RAZ-40) ---------------- */
+/* ---------------- source screen (RAZ-40 · manual search + review · RAZ-37) ----------------
+ * TWO PANELS, because the two halves genuinely run on different clocks:
+ *   Panel A "Search"  — sync sources (TMDB + the 5 AI-search scrapers, 19-78s) answer inline.
+ *   Panel B "Review"  — the queue over manual_search_results. Async keyword DISCOVERY
+ *                       (bd_youtube_search, minutes) can ONLY land here, never inline.
+ * Nothing reaches source_events from here except via Promote — the one explicit human step.
+ */
+
+const SOURCE_CATALOG = "../supabase/functions/m2-contentsource/sources.json";
+const FN = (CFG.SUPABASE_URL || "").replace(/\/$/, "") + "/functions/v1/m2-contentsource";
+
+const src = {
+  catalog: [],       // search-capable entries from the DEPLOYED sources.json
+  picked: new Set(), // source names ticked in panel A
+  videoType: "",     // "" = both | "Video" | "Shorts"
+  keyword: "",
+  aiAssist: false,
+  busy: false,
+  queue: [],         // manual_search_results status=new
+  chosen: new Set(), // queue row ids ticked in panel B
+  pages: [],         // page_source_settings
+  promoteTo: "",
+  lastRun: null,
+};
+
+async function fn(body) {
+  const res = await fetch(FN, { method: "POST", headers: HEAD, body: JSON.stringify(body) });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* non-JSON error body */ }
+  if (!res.ok && !json) throw new Error(`${res.status}: ${text.slice(0, 200)}`);
+  if (json && json.ok === false && json.error) throw new Error(json.error);
+  return json;
+}
+
+// A source is ASYNC when it is a Bright Data discover job — those cannot answer inside the
+// function's sync budget (measured: 112.6s, 0 records) and must go via search_plan -> n8n.
+const isAsync = (s) => s.bd_input === "search_filters";
+
+async function loadSource() {
+  const cat = await fetch(SOURCE_CATALOG).then((r) => {
+    if (!r.ok) throw new Error("catalog fetch " + r.status);
+    return r.json();
+  });
+  // The DEPLOYED catalog is the truth — never a second copy of the source list here.
+  src.catalog = (cat.sources || []).filter((s) => s && s.name && s.enabled && s.search === true);
+  const [queue, pages] = await Promise.all([
+    db("/manual_search_results?select=id,keyword,source,material_type,external_id,ai_assisted,status,payload,searched_at&status=eq.new&order=id.desc&limit=200").catch(() => []),
+    db("/page_source_settings?select=page_id,sources_enabled&order=page_id.asc").catch(() => []),
+  ]);
+  src.queue = queue || [];
+  src.pages = pages || [];
+  if (!src.promoteTo) {
+    const on = src.pages.find((p) => p.sources_enabled);
+    src.promoteTo = on ? on.page_id : "";
+  }
+}
 
 function renderSource() {
+  const ai = src.catalog.filter((s) => s.bd_input === "prompt");
+  const free = src.catalog.filter((s) => s.type !== "brightdata");
+  const disc = src.catalog.filter(isAsync);
+  const anyAsync = [...src.picked].some((n) => disc.some((d) => d.name === n));
+
+  const box = (s, note) => `<label class="check" title="${esc(s.notes || "").slice(0, 160)}">
+      <input type="checkbox" class="srcpick" value="${esc(s.name)}" ${src.picked.has(s.name) ? "checked" : ""}>
+      ${esc(s.name)}${note ? ` <span class="tag">${note}</span>` : ""}</label>`;
+
+  const q = src.queue;
+  const byKw = new Map();
+  for (const r of q) byKw.set(r.keyword, (byKw.get(r.keyword) || 0) + 1);
+
   $("#screen").innerHTML = `<h1>Content Source</h1>
-    <p class="sub">M2 material config.</p>
+    <p class="sub">M2 · manual keyword search (RAZ-37). Results are ISOLATED — nothing reaches the event stream until you Promote.</p>
+
     <div class="card">
-      <h2>Not built yet <span class="tag warn">RAZ-40</span></h2>
-      <p class="hint">v2 of AR-1: the adapter board (deployed catalog truth), the three campaign tabs (material / reference / article), <span class="mono">sources_enabled</span> gates, and run-now.</p>
-      <p class="hint">Run-now already has its endpoint: the RAZ-36 harvest webhook <span class="mono">POST /webhook/m2-reference-harvest</span> with <span class="mono">{ref_ids:[…]}</span>.</p>
+      <h2>Search <span class="tag">panel A</span></h2>
+      <p class="hint">Free + AI sources answer inline (~19–78s). Bright Data keyword discovery is a <em>discover</em> job — it runs async via n8n and lands in the queue below minutes later, never inline.</p>
+      <div class="row" style="margin-bottom:10px">
+        <input id="skw" placeholder="keyword…" value="${esc(src.keyword)}" style="min-width:280px">
+        <label class="check"><input type="checkbox" id="sai" ${src.aiAssist ? "checked" : ""}> AI-assist match</label>
+        <button class="btn" id="sgo" ${src.busy ? "disabled" : ""}>${src.busy ? "Searching…" : "Search"}</button>
+      </div>
+
+      <div class="row" style="align-items:flex-start;gap:22px;flex-wrap:wrap">
+        <div><div class="hint" style="margin-bottom:4px">Free</div>${free.map((s) => box(s)).join("") || '<span class="hint">none</span>'}</div>
+        <div><div class="hint" style="margin-bottom:4px">AI answer <span class="tag">paid · sync</span></div>${ai.map((s) => box(s)).join("") || '<span class="hint">none</span>'}</div>
+        <div><div class="hint" style="margin-bottom:4px">Keyword discovery <span class="tag warn">paid · async</span></div>${disc.map((s) => box(s, "async")).join("") || '<span class="hint">none</span>'}</div>
+      </div>
+
+      ${disc.length && anyAsync ? `<div class="row" style="margin-top:10px">
+        <span class="hint">video type</span>
+        <select id="svt">
+          <option value="" ${src.videoType === "" ? "selected" : ""}>both (video + shorts)</option>
+          <option value="Video" ${src.videoType === "Video" ? "selected" : ""}>Video only (long-form)</option>
+          <option value="Shorts" ${src.videoType === "Shorts" ? "selected" : ""}>Shorts only</option>
+        </select>
+        <span class="hint">capped at 10 records per search</span>
+      </div>` : ""}
+
+      ${src.lastRun ? `<p class="hint" style="margin-top:10px">${esc(src.lastRun)}</p>` : ""}
+    </div>
+
+    <div class="card">
+      <div class="spread">
+        <h2>Review queue <span class="tag">panel B</span> <span class="tag ${q.length ? "on" : ""}">${q.length} new</span></h2>
+        <div class="row">
+          <span class="hint">promote to page</span>
+          <select id="spage">
+            ${src.pages.map((p) => `<option value="${esc(p.page_id)}" ${src.promoteTo === p.page_id ? "selected" : ""} ${p.sources_enabled ? "" : "disabled"}>${esc(p.page_id)}${p.sources_enabled ? "" : " (gated off)"}</option>`).join("")}
+          </select>
+          <button class="btn" id="spromote" ${src.chosen.size && src.promoteTo ? "" : "disabled"}>Promote ${src.chosen.size || ""}</button>
+          <button class="btn ghost" id="sdiscard" ${src.chosen.size ? "" : "disabled"}>Discard</button>
+          <button class="btn ghost" id="srefresh">Refresh</button>
+        </div>
+      </div>
+      <p class="hint">Promote emits a real SourceEnriched into <span class="mono">source_events</span> (fresh correlation_id, causation_id null) and flips the row to <span class="mono">promoted</span> — the only bridge out of this store. Discard keeps the row as a record of what you rejected; it emits nothing.</p>
+      ${byKw.size ? `<p class="hint">${[...byKw].map(([k, n]) => `<span class="tag">${esc(k)} · ${n}</span>`).join(" ")}</p>` : ""}
+      <div class="tablewrap"><table>
+        <tr><th style="width:28px"><input type="checkbox" id="sall"></th><th>Title</th><th>Source</th><th>Engagement</th><th>Found</th><th>Link</th></tr>
+        ${q.map((r) => {
+          const p = r.payload || {};
+          const e = p.engagement || null;
+          const eng = e ? Object.entries(e).filter(([, v]) => v !== null && v !== undefined).map(([k, v]) => `${k[0]}:${v}`).join(" ") : "—";
+          return `<tr>
+            <td><input type="checkbox" class="qpick" value="${r.id}" ${src.chosen.has(r.id) ? "checked" : ""}></td>
+            <td>${p.image_url ? `<img src="${esc(p.image_url)}" alt="" style="width:46px;height:26px;object-fit:cover;border-radius:3px;vertical-align:middle;margin-right:8px">` : ""}${esc(String(p.title || "").slice(0, 78))}</td>
+            <td class="mono">${esc(r.source)}${p.kind ? ` <span class="tag">${esc(p.kind)}</span>` : ""}</td>
+            <td class="mono">${esc(eng)}</td>
+            <td class="mono">${esc((r.searched_at || "").slice(5, 16).replace("T", " "))}</td>
+            <td>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">open</a>` : "—"}</td>
+          </tr>`;
+        }).join("") || `<tr><td colspan="6" class="empty">Nothing waiting. Search above — results land here.</td></tr>`}
+      </table></div>
     </div>`;
+
+  /* --- panel A wiring --- */
+  $("#skw").addEventListener("input", (e) => { src.keyword = e.target.value; });
+  $("#sai").addEventListener("change", (e) => { src.aiAssist = e.target.checked; });
+  const vt = $("#svt");
+  if (vt) vt.addEventListener("change", (e) => { src.videoType = e.target.value; });
+  document.querySelectorAll(".srcpick").forEach((c) =>
+    c.addEventListener("change", (e) => {
+      e.target.checked ? src.picked.add(e.target.value) : src.picked.delete(e.target.value);
+      renderSource(); // the video-type toggle only exists while an async source is picked
+    })
+  );
+  $("#sgo").addEventListener("click", runSearch);
+
+  /* --- panel B wiring --- */
+  $("#sall").addEventListener("change", (e) => {
+    src.chosen = e.target.checked ? new Set(q.map((r) => r.id)) : new Set();
+    renderSource();
+  });
+  document.querySelectorAll(".qpick").forEach((c) =>
+    c.addEventListener("change", (e) => {
+      const id = Number(e.target.value);
+      e.target.checked ? src.chosen.add(id) : src.chosen.delete(id);
+      renderSource();
+    })
+  );
+  $("#spage").addEventListener("change", (e) => { src.promoteTo = e.target.value; });
+  $("#spromote").addEventListener("click", doPromote);
+  $("#sdiscard").addEventListener("click", doDiscard);
+  $("#srefresh").addEventListener("click", async () => { await loadSource(); renderSource(); });
+}
+
+async function runSearch() {
+  const kw = (src.keyword || "").trim();
+  if (!kw) return toast("Enter a keyword", true);
+  if (!src.picked.size) return toast("Pick at least one source", true);
+
+  const names = [...src.picked];
+  const asyncNames = names.filter((n) => src.catalog.some((s) => s.name === n && isAsync(s)));
+  const syncNames = names.filter((n) => !asyncNames.includes(n));
+
+  src.busy = true; src.lastRun = null; renderSource();
+  const notes = [];
+  try {
+    // Sync half: answers inline, writes straight to the queue (sink=manual).
+    if (syncNames.length) {
+      const r = await fn({ mode: "search", keyword: kw, sources: syncNames, sink: "manual", ai_assist: src.aiAssist });
+      notes.push(`sync: ${r.written} result(s) from ${(r.sources || []).join(", ") || "—"}`);
+      if (r.errors && r.errors.length) notes.push(`errors: ${r.errors.join(" | ")}`);
+    }
+    // Async half: search_plan only PLANS. n8n runs the slow trigger->poll->download->ingest.
+    if (asyncNames.length) {
+      const plan = await fn({
+        mode: "search_plan", keyword: kw, sources: asyncNames,
+        video_type: src.videoType || null, sink: "manual", ai_assist: src.aiAssist,
+      });
+      const jobs = plan.jobs || [];
+      let fired = 0;
+      for (const job of jobs) {
+        try {
+          // Fire-and-forget: the worker responds immediately, results land minutes later.
+          await fetch(CFG.HARVEST_WORKER_URL, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(job),
+          });
+          fired++;
+        } catch (e) {
+          notes.push(`async dispatch failed for ${job.source}: ${e.message}`);
+        }
+      }
+      if (fired) notes.push(`async: ${fired} job(s) dispatched — results land in the queue in a few minutes, hit Refresh`);
+      if (plan.skipped && plan.skipped.length) notes.push(`skipped: ${plan.skipped.map((s) => s.source + " (" + s.reason + ")").join(", ")}`);
+    }
+    src.lastRun = notes.join(" · ") || "nothing ran";
+    toast("Search done");
+  } catch (e) {
+    src.lastRun = "failed: " + e.message;
+    toast("Search failed: " + e.message, true);
+  } finally {
+    src.busy = false;
+    await loadSource();
+    renderSource();
+  }
+}
+
+async function doPromote() {
+  const ids = [...src.chosen];
+  if (!ids.length || !src.promoteTo) return;
+  try {
+    const r = await fn({ mode: "promote", ids, pages: [src.promoteTo] });
+    // fresh < pulled means the freshness invariant deduped some — say so rather than
+    // let it look like a silent partial failure.
+    const dup = (r.material_pulled || 0) - (r.material_fresh || 0);
+    toast(`Promoted ${r.written} event(s) to ${src.promoteTo}` + (dup > 0 ? ` · ${dup} already in the stream (deduped)` : ""));
+    src.chosen = new Set();
+    await loadSource();
+    renderSource();
+  } catch (e) {
+    toast("Promote failed: " + e.message, true);
+  }
+}
+
+async function doDiscard() {
+  const ids = [...src.chosen];
+  if (!ids.length) return;
+  try {
+    // No event, no bridge — just a status flip, so this is a plain PostgREST write.
+    await db(`/manual_search_results?id=in.(${ids.join(",")})`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "discarded" }),
+    });
+    toast(`Discarded ${ids.length} row(s)`);
+    src.chosen = new Set();
+    await loadSource();
+    renderSource();
+  } catch (e) {
+    toast("Discard failed: " + e.message, true);
+  }
 }
 
 /* ---------------- boot ---------------- */
@@ -526,7 +767,15 @@ function render() {
   document.querySelectorAll(".navitem").forEach((b) => b.classList.toggle("active", b.dataset.screen === state.screen));
   if (state.screen === "trend") renderTrend();
   else if (state.screen === "infra") renderInfra();
-  else renderSource();
+  else {
+    // Source data is loaded lazily — the trend screen is the default and must not pay
+    // for a catalog fetch + two queries it never uses.
+    loadSource().then(renderSource).catch((e) => {
+      $("#screen").innerHTML = `<h1>Content Source</h1><div class="card"><h2>Could not load</h2>
+        <p class="hint mono">${esc(e.message).slice(0, 240)}</p>
+        <p class="hint">The catalog is fetched from <span class="mono">${esc(SOURCE_CATALOG)}</span> — serve from the REPO ROOT, not from inside /admin.</p></div>`;
+    });
+  }
 
   if (!state.hasCampaign) {
     banner(

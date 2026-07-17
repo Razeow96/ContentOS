@@ -64,14 +64,15 @@ async function buildInputs(
     return urls.map((u) => ({ url: u, ...extra }));
   }
 
-  // bd_input="search_filters": keyword DISCOVERY (e.g. YouTube search). One row, the
-  // keyword as the platform's search field. `type` is the video/shorts toggle and is
-  // passed straight through as Bright Data's own enum (Video|Shorts; omit = both) so the
-  // enum stays config/caller data and never becomes a translation table in here.
-  if (src.bd_input === "search_filters") {
+  // bd_input="keyword": keyword DISCOVERY. One row, the keyword under the platform's own
+  // field name — which differs per platform, hence config not code.
+  if (src.bd_input === "keyword") {
     if (!keyword) return [];
+    const kwField = src.bd_keyword_field ?? "keyword";
+    const row: Record<string, unknown> = { [kwField]: keyword, ...extra };
     const t = String(job.params.video_type ?? "").trim();
-    return [{ keyword_search: keyword, ...(t ? { type: t } : {}), ...extra }];
+    if (t && src.bd_video_type_field) row[src.bd_video_type_field] = t;
+    return [row];
   }
 
   // bd_input="prompt" (default): AI-search scrapers — one row, the keyword as prompt.
@@ -129,11 +130,11 @@ export async function pullBrightData(
   }
   // DISCOVER jobs are async-only. Bright Data's own guidance: discovery tasks must run via
   // POST /datasets/v3/trigger and can take several minutes; sync /scrape has a ~1min budget.
-  // Measured 2026-07-17: bd_input=url channel discover ~4min; bd_input=search_filters keyword
-  // discover 112.6s with dataset_size STILL 0 (nothing collected). Both belong on the async
+  // Measured 2026-07-17: bd_input=url channel discover ~4min; bd_input=keyword discover
+  // 112.6s with dataset_size STILL 0 (nothing collected). Both belong on the async
   // n8n path (search_plan/harvest_plan → trigger → poll → download → ingest).
   // Only bd_input=prompt (AI-search: one prompt → one answer, 19–78s proven) runs here.
-  if (src.bd_input === "url" || src.bd_input === "search_filters") {
+  if (src.bd_input === "url" || src.bd_input === "keyword") {
     throw new Error(
       `${src.name}: ${src.bd_input} is a DISCOVER job and is async-only — use the n8n ` +
         `${src.bd_input === "url" ? "harvest_plan" : "search_plan"}→worker→ingest path, not sync search`,

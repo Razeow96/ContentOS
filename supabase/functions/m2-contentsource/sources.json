@@ -41,12 +41,21 @@
       "notes": "SCAFFOLD (disabled, RAZ-24). Per-movie ({movie_id}) and returns results keyed by country, not an array — needs movie-driven routing, not a standalone list."
     },
     {
-      "name": "article_rss", "type": "rss", "enabled": false,
+      "name": "article_rss", "type": "rss", "enabled": true,
       "material_type": "article", "kind": null, "tier": "material",
-      "url": "{feed_url}", "auth_ref": null,
+      "url": "", "auth_ref": null,
       "defaults": {}, "response_items_path": "rss.channel.item",
-      "field_map": { "title": "title", "summary": "description", "url": "link", "external_id": "guid", "published_at": "pubDate" },
-      "notes": "SCAFFOLD (disabled, RAZ-25). {feed_url} filled per page_article_sources row; scrape-mode articles arrive via ingest."
+      "field_map": { "title": "title", "summary": "description", "url": "link", "external_id": ["guid.#text", "guid", "link"], "published_at": "pubDate", "topic_tags": "category" },
+      "notes": "RAZ-25 · article feeds. url is EMPTY on purpose — the feed URL comes from page_article_sources.url and is assigned directly by buildArticleJobs, never templated: fillUrl runs every {placeholder} through encodeURIComponent, which is correct for a query param but would mangle a whole feed URL into https%3A%2F%2F... external_id is a FALLBACK CHAIN because RSS <guid> commonly carries an attribute (<guid isPermaLink=\"false\">), which the XML parser yields as an OBJECT {@isPermaLink, #text} — mapping it as a plain path stringifies to '[object Object]' on EVERY item, collapsing the dedup key so only one article per feed per day survives. guid.#text first, bare guid for feeds whose guid has no attributes, link as last resort. topic_tags=category: RSS repeats <category> so it parses to an array. Only mode='rss' rows run here; mode='scrape' needs the async web-extractor path and is filtered out in loadArticleRows. Every feed host needs an api_rate_limits row or the gate denies it (no row = denied, fail-closed)."
+    },
+    {
+      "name": "article_scrape", "type": "scrape", "enabled": true,
+      "material_type": "article", "kind": null, "tier": "material",
+      "url": "", "auth_ref": null,
+      "bd_zone": "mcp_unlocker",
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "title", "summary": "description", "url": "url", "external_id": "url", "image_url": "image", "published_at": "published_time" },
+      "notes": "RAZ-25 · article feeds, mode='scrape' (the no-feed case). url is EMPTY on purpose — the page URL comes from page_article_sources.url and is assigned by buildArticleJobs, never templated (fillUrl would encodeURIComponent a whole URL). Uses Bright Data WEB UNLOCKER (POST /request), NOT the datasets API: there is no per-site dataset for 'some news site', and /request is a direct fetch that returns in seconds — so unlike a discover job it fits the sync budget and needs no n8n. bd_zone must be a real zone (GET /zone/get_active_zones); 'mcp_unlocker' is BORROWED from the MCP's zone — a dedicated zone is a dashboard action if the two ever need separate budgets. Extraction is Open Graph first: every publisher emits og:*/article:published_time for their own share cards, so it is the closest thing to a universal article schema, and it is what the page ITSELF declares rather than our guess at which div holds the body; falls back to <title>/meta description. external_id=url (og:url canonical, falling back to the requested URL) — an article page has no id of its own. COST: the gate bills ONE REQUEST PER PAGE here (vs one per feed for RSS), so scrape is the expensive mode — prefer an RSS row whenever the site publishes a feed."
     },
     {
       "name": "reference_harvest", "type": "ingest", "enabled": true,
@@ -155,12 +164,48 @@
     {
       "name": "bd_youtube_search", "type": "brightdata", "enabled": true, "search": true,
       "material_type": "reference_post", "kind": null, "tier": "inspiration",
-      "url": "", "auth_ref": null, "dataset_id": "gd_lk56epmy2i5g7lzu0k", "bd_input": "search_filters",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lk56epmy2i5g7lzu0k", "bd_input": "keyword",
       "bd_discover_by": "search_filters",
+      "bd_keyword_field": "keyword_search",
+      "bd_video_type_field": "type",
       "bd_search_cap": 10,
       "defaults": {}, "response_items_path": "",
       "field_map": { "title": "title", "summary": "description", "kind": "post_type", "external_id": "video_id", "image_url": "preview_image", "url": "url", "published_at": "date_posted", "media": "video_url", "engagement": { "likes": "likes", "comments": "num_comments" } },
       "notes": "YouTube KEYWORD SEARCH for the manual AI-assisted search tool (RAZ-37) — NOT the reference harvester (that's bd_youtube, same dataset, discover_by=url). Opt-in only: Bright Data is paid+slow, so buildSearchJobs excludes it unless named in body.sources. Uses discover_by=search_filters (probe-confirmed 2026-07-17), inputs {keyword_search REQUIRED, upload_date, type, duration, features, country, sort_by}. Chosen over discover_by=keyword because ONLY search_filters can express shorts-ONLY: its `type` enum is CAPITALIZED — Video|Shorts|Channel|Playlist|Movie all pass, 'short' rejected. Caller sets video_type — ALL THREE VERIFIED live 2026-07-17 (cap=10 each, checked against BD's OWN post_type output field, not the input filter): 'Video' -> 10/10 post_type='post' (no shorts); 'Shorts' -> 10/10 post_type='short' (no long-form); OMIT -> mixed 6 short + 4 post (genuinely both). Do NOT use video_length to tell them apart: shorts in that sample ran up to 164s. post_type ('post'|'short'|'N/A') is the only reliable discriminator and is mapped to kind. BD's own API-limitations panel warns 'Shorts do not ret...' and flags date-filter caveats (panel truncated in the dashboard screenshot — read it before adding upload_date/duration). Tradeoff: search_filters declares NO num_of_posts, so bd_search_cap -> limit_per_input is the ONLY record cap — never remove it. field_map is inherited from bd_youtube, VERIFIED 2026-07-17 against 10 real records of this exact dataset (same gd_ = same output schema): image_url=preview_image (NOT 'thumbnail', which doesn't exist) and engagement is flat {likes, num_comments} with views excluded. ASYNC-ONLY (mode=search_plan -> n8n Harvest Worker -> mode=ingest with sink=manual). MEASURED, NOT GUESSED: a live gated SYNC run (keyword='movie recap', video_type=Video, cap=10) took 112.6s, blew the 110s budget, and reported dataset_size:0 at cancel — ZERO records after ~2.5min. Not a near-miss: raising TIMEOUT_MS would not save it, because BD discovery tasks take minutes by design and must use POST /datasets/v3/trigger (their docs say so explicitly; sync /scrape auto-converts and times out). pullBrightData therefore REFUSES bd_input=search_filters, same as bd_input=url. Everything else was already proven on that run: payload validates, gate books it, key authenticates, field_map verified."
+    },
+    {
+      "name": "bd_tiktok_search", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lu702nij2f790tmv9h", "bd_input": "keyword", "platform": "tiktok",
+      "bd_discover_by": "keyword",
+      "bd_keyword_field": "search_keyword",
+      "bd_search_cap": 10,
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "description", "summary": "description", "kind": "post_type", "external_id": "post_id", "image_url": "preview_image", "url": "url", "published_at": "create_time", "topic_tags": "hashtags", "media": "video_url", "engagement": { "likes": "digg_count", "comments": "comment_count", "shares": "num_share_count" } },
+      "notes": "RAZ-37 · tiktok KEYWORD search for the manual tool. Same dataset as bd_tiktok (the reference harvester) — only the discovery differs, so the output schema and field_map are identical and inherit bd_tiktok's 2026-07-16 verification. Async-only via search_plan (keyword discovery is a discover job). Input schema probe-confirmed 2026-07-17: {search_keyword REQUIRED, country} — NOTE the field is 'search_keyword', NOT 'keyword' like reddit/pinterest, and BD rejects unknown fields, hence bd_keyword_field. No result-type filter on tiktok, so video_type is ignored. bd_search_cap -> limit_per_input is the ONLY record cap."
+    },
+    {
+      "name": "bd_reddit_search", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lvz8ah06191smkebj4", "bd_input": "keyword", "platform": "reddit",
+      "bd_discover_by": "keyword",
+      "bd_keyword_field": "keyword",
+      "bd_params": { "date": "All time", "sort_by": "Relevance" },
+      "bd_search_cap": 10,
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": "title", "summary": "description", "external_id": "post_id", "url": "url", "published_at": "date_posted", "image_url": "photos.0", "media": "videos", "engagement": { "likes": "num_upvotes", "comments": "num_comments" } },
+      "notes": "RAZ-37 · reddit KEYWORD search for the manual tool. Same dataset as bd_reddit — only the discovery differs, so the field_map is identical and inherits bd_reddit's 2026-07-17 verification (10 real records). Async-only via search_plan. Input schema probe-confirmed 2026-07-17: {keyword REQUIRED, date REQUIRED, sort_by} — reddit is the ONLY platform with a SECOND required field: omit 'date' and the trigger is rejected, hence it lives in bd_params rather than being optional. Enums are CAPITALIZED (the recurring BD rule): date = All time|Past year|Past month|Past week|Today ('all time' rejected); sort_by = Hot|New|Top|Relevance. Defaults are 'All time' + 'Relevance' because a keyword SEARCH wants the best matches for the term, not the newest thing on reddit — unlike bd_reddit's subreddit harvest, where sort derives from the ref's strategy."
+    },
+    {
+      "name": "bd_pinterest_search", "type": "brightdata", "enabled": true, "search": true,
+      "material_type": "reference_post", "kind": null, "tier": "inspiration",
+      "url": "", "auth_ref": null, "dataset_id": "gd_lk0sjs4d21kdr7cnlv", "bd_input": "keyword", "platform": "pinterest",
+      "bd_discover_by": "keyword",
+      "bd_keyword_field": "keyword",
+      "bd_search_cap": 10,
+      "defaults": {}, "response_items_path": "",
+      "field_map": { "title": ["content", "hashtags.0"], "summary": "content", "kind": "post_type", "external_id": "post_id", "image_url": "image_video_url", "url": "url", "published_at": "date_posted", "topic_tags": "hashtags", "media": "image_video_url", "engagement": { "likes": "likes", "comments": "comments_num" } },
+      "notes": "RAZ-37 · pinterest KEYWORD search for the manual tool. Async-only via search_plan. Input schema probe-confirmed 2026-07-17: {keyword REQUIRED} — the simplest of the four, no other inputs at all. ** THE SAME DATASET RETURNS A DIFFERENT SHAPE PER DISCOVERY MODE ** — do NOT assume a search entry can inherit its harvester's field_map. bd_pinterest (discover_by=profile_url) verified 'title' 9/9, but keyword-discovery pins have NO 'title' KEY AT ALL, so the inherited map dropped all 7 records at normalize (title is required) and reported ok:true with material_pulled:0 — a silent total loss. Corrected against the real keyword payload 2026-07-17: title=[content, hashtags.0] — 'content' is the pin caption but only ~4/7 pins carry one, and hashtags.0 is a real per-pin value (e.g. 'Hollywood Poster Design') rather than a page-level constant. tiktok and reddit DID inherit cleanly (verified live), so this is per-platform, not a rule. BD also returns error records ({error, error_code:dead_page}, 3/10 here — pinterest keyword search is lossy); they carry no title and are correctly dropped."
     },
     {
       "name": "bd_linkedin", "type": "brightdata", "enabled": true, "search": true,

@@ -5,7 +5,10 @@ keep the document lean without any expired info
 
 ## Tracking discipline
 - Keep Linear status honest and current — move issues to Done/In Review as work actually completes, don't just comment. He will call out a board that doesn't match reality.
-any mismatch documented feature or requirement do open discussion with user before implement any changes
+- **Claude is the PM: MARK IT DONE.** When every acceptance criterion is met AND verified with real evidence, move it to **Done** yourself — do not park verified work in In Review waiting for approval. Nobody is coming to approve it, and a board where nothing reaches Done is just as dishonest as one that over-claims.
+- **In Review means one thing only: built but NOT yet verified** (e.g. needs a live run, a browser click-test, a scheduled trigger to fire). State the missing evidence in a comment. If it is verified, it is Done.
+- Never mark Done on "it returned rows" or "the code looks right" — Done needs the acceptance criteria actually exercised. Cite the evidence in a comment.
+- any mismatch documented feature or requirement do open discussion with user before implement any changes
 
 note : treat linear as software documentation and project management including stakeholder communication
 

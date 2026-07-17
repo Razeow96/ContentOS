@@ -1,7 +1,9 @@
 // Shared types for the m2-contentsource Edge Function.
 // The SourceEnriched shape here MUST match the Linear contract "SourceEnriched v1".
 
-export type MaterialAdapterType = "api" | "rss" | "ingest" | "brightdata";
+// "scrape" = Bright Data Web Unlocker (POST /request) for a single article page — a direct
+// fetch, NOT the datasets API, so it is sync and needs no n8n orchestration.
+export type MaterialAdapterType = "api" | "rss" | "ingest" | "brightdata" | "scrape";
 export type Tier = "material" | "inspiration";
 
 // One source entry from sources.json (the material catalog)
@@ -21,12 +23,20 @@ export interface MaterialSource {
   // Bright Data (type="brightdata") only:
   dataset_id?: string;               // gd_... scraper id from the Bright Data dashboard
   platform?: string;                 // for bd_input="url": matches page_reference_sources.platform
-  bd_input?: "prompt" | "url" | "search_filters"; // "prompt" = AI scraper (keyword→answer); "url" = scrape ref pages; "search_filters" = keyword discovery
+  bd_input?: "prompt" | "url" | "keyword"; // "prompt" = AI scraper (keyword→answer); "url" = scrape ref pages; "keyword" = keyword discovery
   bd_url?: string;                   // bd_input="prompt": the scraper's required chat-surface url
   bd_discover_by?: string;           // discover mode (profile_url|url|search_filters|...); omit = collect-by-URL
   bd_params?: Record<string, unknown>; // extra fields merged into each Bright Data input row
-  bd_search_cap?: number;            // bd_input="search_filters": limit_per_input on the discover phase.
-                                     // search_filters declares NO num_of_posts, so this is the ONLY cap.
+  bd_search_cap?: number;            // bd_input="keyword": limit_per_input on the discover phase.
+                                     // Keyword discovery declares no reliable count input, so this is the ONLY cap.
+  // bd_input="keyword": the platform's own name for "the search term" — it is NOT the same
+  // everywhere (probe-confirmed 2026-07-17: youtube keyword_search · tiktok search_keyword ·
+  // reddit/pinterest keyword), and BD rejects unknown fields, so this must be data.
+  bd_keyword_field?: string;
+  // bd_input="keyword": the platform's field for a result-type filter, if it has one
+  // (youtube "type" = Video|Shorts). Absent = the source has no such concept and the
+  // caller's video_type is ignored rather than injected as a field BD will reject.
+  bd_video_type_field?: string;
   // Sort is per-SOURCE config but strategy is per-REF, so a static bd_params sort would rank
   // best_performing refs against the wrong ordering (a reddit ref sorted "New" has ~0 upvotes
   // to rank BY). These two make the strategy→sort mapping DATA: the param name differs per
@@ -34,6 +44,7 @@ export interface MaterialSource {
   // hardcoded in config.ts. Omit both = source has no sort concept.
   bd_sort_param?: string;                        // e.g. "sort_by" | "order_by"
   bd_sort_by_strategy?: Record<string, string>;  // e.g. { latest_n: "New", best_performing: "Top" }
+  bd_zone?: string;                  // type="scrape": the Web Unlocker zone (GET /zone/get_active_zones)
   defaults: Record<string, string | null>;
   response_items_path: string;       // dot-path to the array of items ("" = response is the array)
   // A value is: a dot-path ("post_text") · a FALLBACK CHAIN of paths, first non-empty wins
@@ -91,6 +102,17 @@ export interface SearchJob {
   keyword: string;
   sink: "events" | "manual";
   ai_assist: boolean;
+}
+
+// One row from page_article_sources (RAZ-25) — an article feed/site per page.
+// mode="rss": the site publishes a feed, parsed in-function (free, structured).
+// mode="scrape": no feed — needs the async web-extractor path, not built yet.
+export interface ArticleRow {
+  id: number;
+  page_id: string;
+  mode: "rss" | "scrape";
+  url: string;
+  enabled: boolean;
 }
 
 // One row from the page_material_sources table (per-page API-adapter subscription)

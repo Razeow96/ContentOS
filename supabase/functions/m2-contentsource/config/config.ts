@@ -1,5 +1,5 @@
 import catalogJson from "../sources.json" with { type: "json" };
-import type { MaterialSource, MaterialSubscription, MaterialJob, RefRow, HarvestJob, SearchJob } from "../service/types.ts";
+import type { MaterialSource, MaterialSubscription, MaterialJob, RefRow, HarvestJob, SearchJob, ArticleRow } from "../service/types.ts";
 
 const BD_BASE = "https://api.brightdata.com/datasets/v3";
 
@@ -18,6 +18,26 @@ export async function loadMaterialSubs(supabaseUrl: string, serviceKey: string):
   const res = await fetch(`${supabaseUrl}/rest/v1/page_material_sources?enabled=eq.true&select=*`, { headers: h });
   if (!res.ok) throw new Error(`Failed to load page_material_sources: ${res.status}`);
   const rows = (await res.json()) as MaterialSubscription[];
+
+  const gate = await fetch(
+    `${supabaseUrl}/rest/v1/page_source_settings?sources_enabled=eq.true&select=page_id`,
+    { headers: h },
+  );
+  const on = new Set<string>(((await gate.json()) as { page_id: string }[]).map((r) => r.page_id));
+  return rows.filter((r) => on.has(r.page_id));
+}
+
+// page_article_sources rows (RAZ-25), gated by page_source_settings like the material subs.
+// Both modes run in-function: rss parses a feed, scrape pulls ONE page through the Web
+// Unlocker (a direct fetch, seconds — not a discover job, so no n8n needed).
+export async function loadArticleRows(supabaseUrl: string, serviceKey: string): Promise<ArticleRow[]> {
+  const h = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
+  const res = await fetch(
+    `${supabaseUrl}/rest/v1/page_article_sources?enabled=eq.true&select=*`,
+    { headers: h },
+  );
+  if (!res.ok) throw new Error(`Failed to load page_article_sources: ${res.status}`);
+  const rows = (await res.json()) as ArticleRow[];
 
   const gate = await fetch(
     `${supabaseUrl}/rest/v1/page_source_settings?sources_enabled=eq.true&select=page_id`,
@@ -207,12 +227,12 @@ export function buildSearchPlan(
 
   // Bright Data is paid + slow: OPT-IN only, exactly as buildSearchJobs treats it.
   const candidates = catalog.filter((s) =>
-    s.type === "brightdata" && s.bd_input === "search_filters" &&
+    s.type === "brightdata" && s.bd_input === "keyword" &&
     (sourceNames ? sourceNames.includes(s.name) : false)
   );
   if (sourceNames) {
     for (const n of sourceNames) {
-      if (!candidates.some((c) => c.name === n)) skipped.push({ source: n, reason: "not a bd search_filters source" });
+      if (!candidates.some((c) => c.name === n)) skipped.push({ source: n, reason: "not a bd keyword-search source" });
     }
   }
 
@@ -231,8 +251,17 @@ export function buildSearchPlan(
     if (src.bd_discover_by) trigger_url += `&type=discover_new&discover_by=${encodeURIComponent(src.bd_discover_by)}`;
     trigger_url += `&limit_per_input=${cap}`;
 
-    // video_type is Bright Data's own `type` enum (Video | Shorts); omit = both.
+    // The search term goes under the platform's OWN field name (probe-confirmed: youtube
+    // keyword_search · tiktok search_keyword · reddit/pinterest keyword). BD rejects unknown
+    // fields outright, so this is data, never a guess.
+    const kwField = src.bd_keyword_field ?? "keyword";
+    const row: Record<string, unknown> = { [kwField]: keyword, ...(src.bd_params ?? {}) };
+    // video_type is Bright Data's own enum (Video | Shorts; omit = both) and only exists on
+    // sources that declare a field for it — otherwise it is dropped rather than injected
+    // into a payload BD would reject.
     const t = String(opts.videoType ?? "").trim();
+    if (t && src.bd_video_type_field) row[src.bd_video_type_field] = t;
+
     jobs.push({
       source: src.name,
       ingest_source: src.name,
@@ -240,7 +269,7 @@ export function buildSearchPlan(
       dataset_id: src.dataset_id,
       discover_by: src.bd_discover_by ?? null,
       trigger_url,
-      inputs: [{ keyword_search: keyword, ...(t ? { type: t } : {}), ...(src.bd_params ?? {}) }],
+      inputs: [row],
       cap,
       keyword,
       sink: opts.sink ?? "manual",
@@ -248,6 +277,42 @@ export function buildSearchPlan(
     });
   }
   return { jobs, skipped };
+}
+
+// RAZ-25 · one job per distinct feed URL, subscribers = every page wanting that feed.
+// Deliberately NOT buildMaterialJobs: that fills {placeholders} through encodeURIComponent,
+// which is right for a query param but would mangle a whole feed URL
+// ("{feed_url}" -> "https%3A%2F%2Fvariety.com%2Ffeed%2F"). A feed URL is the endpoint itself,
+// so it is assigned directly and never templated.
+export function buildArticleJobs(
+  catalog: MaterialSource[],
+  rows: ArticleRow[],
+  trend: Record<string, unknown> | null,
+): MaterialJob[] {
+  // The row's mode picks the adapter — one config table, two extractors.
+  const byMode: Record<string, MaterialSource | undefined> = {
+    rss: catalog.find((s) => s.name === "article_rss"),
+    scrape: catalog.find((s) => s.name === "article_scrape"),
+  };
+  const trig = triggerFrom(trend);
+
+  const byUrl = new Map<string, MaterialJob>();
+  for (const r of rows) {
+    const src = byMode[r.mode];
+    if (!src || !src.enabled) continue;
+    if (!/^https?:\/\//i.test(r.url ?? "")) continue; // a bad row must not become a fetch
+    if (!byUrl.has(r.url)) {
+      byUrl.set(r.url, { source: src, params: {}, url: r.url, subscribers: [], trigger: trig });
+    }
+    const job = byUrl.get(r.url)!;
+    // Defence in depth: fanOut emits one event per (material x subscriber), so the SAME page
+    // listed twice for one feed silently doubles every article into the stream. The unique
+    // index on (page_id, url) is the real guard — this makes a missed constraint or a bad
+    // backfill harmless instead of quietly corrupting the stream.
+    if (job.subscribers.some((s) => s.page_id === r.page_id)) continue;
+    job.subscribers.push({ page_id: r.page_id, source: job.source.name, params: {}, enabled: true });
+  }
+  return [...byUrl.values()];
 }
 
 export function buildSearchJobs(

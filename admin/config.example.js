@@ -10,4 +10,11 @@
 window.CONTENT_OS_CONFIG = {
   SUPABASE_URL: "https://YOUR_PROJECT_REF.supabase.co",
   SUPABASE_KEY: "YOUR_SERVICE_ROLE_KEY",
+
+  // Content Source screen · async keyword discovery only (RAZ-37).
+  // Bright Data discover jobs take minutes and cannot answer inside the edge function's
+  // sync budget, so the browser hands the planned job to the n8n Harvest Worker and the
+  // results land in the review queue later. No secret here — it is a webhook URL.
+  // The worker must be ACTIVE for this path to accept requests.
+  HARVEST_WORKER_URL: "https://YOUR_N8N_HOST/webhook/m2-harvest-worker",
 };
