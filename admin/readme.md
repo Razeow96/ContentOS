@@ -57,4 +57,4 @@ Rows predating campaigns show under **Ungrouped**, read-only — grouping them a
 ## Screens
 
 - **Trend** (RAZ-39) — gates, campaigns, read-only trends feed.
-- **Content Source** (RAZ-40) — not built.
+- **Content Source** (RAZ-40) — search + review half shipped (manual keyword search, promote/discard); config half (adapter board, campaign tabs, gates, run-now) in progress.
