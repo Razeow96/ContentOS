@@ -14,10 +14,13 @@
 //   "search_plan" — READ-ONLY. Async twin of "search" for Bright Data keyword DISCOVERY,
 //              which cannot finish in the sync budget (measured 112.6s, 0 records). Hands n8n
 //              a ready-to-call /trigger job; the worker echoes sink+keyword back to "ingest".
-//   "harvest_plan" — READ-ONLY (RAZ-36). Resolves page_reference_sources against the
-//              Bright Data catalog and hands n8n ready-to-execute jobs. Writes nothing.
-//              n8n can't see sources.json (it's bundled here), so the join happens
-//              here and n8n stays a pure orchestrator holding zero config. (ADR-001)
+//   "harvest_plan" — RAZ-36/RAZ-43. Resolves page_reference_sources against the
+//              Bright Data catalog and hands n8n ready-to-execute jobs. n8n can't see
+//              sources.json (bundled here), so the join happens here and n8n stays a
+//              pure orchestrator holding zero config. (ADR-001)
+//              ⚠ NOT read-only on the due path: scope "due" (alias "daily") atomically
+//              CLAIMS due rows via ref_harvest_claim() — next_run_at advances. Scopes
+//              "all"/"triggered"/ref_ids picks are read-only.
 // n8n schedules & orchestrates; this function owns all source data. (ADR-001)
 
 import {
@@ -32,7 +35,7 @@ import { pullApi, enrichWatchProviders } from "./adapters/api.ts";
 import { pullRss } from "./adapters/rss.ts";
 import { pullScrape } from "./adapters/scrape.ts";
 import { pullBrightData } from "./adapters/brightdata.ts";
-import type { MaterialJob, RawMaterial } from "./service/types.ts";
+import type { MaterialJob, RawMaterial, RefRow } from "./service/types.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -52,14 +55,19 @@ interface RunBody {
   video_type?: string | null;   // bd_input=search_filters toggle: "Video" | "Shorts" | omit = both
   // promote mode:
   ids?: number[];               // manual_search_results row ids the operator chose
-  // harvest_plan mode:
-  scope?: "daily" | "all";
+  // harvest_plan mode. "due" = claim+advance (canonical); "daily" = deployed-dispatcher
+  // alias for "due"; "all"/"triggered" and ref_ids picks are read-only. Any other
+  // string is a 400 — an unrecognized scope must never silently widen the selection.
+  scope?: "due" | "daily" | "all" | "triggered";
   ref_ids?: number[];
   // ingest mode, RAZ-36: n8n echoes these back from the harvest_plan job so the
   // per-ref strategy is applied without re-reading page_reference_sources.
   strategy?: string;
   window_days?: number | null;
   cap?: number | null;
+  // RAZ-43: echoed back by the worker from the harvest_plan job — inspiration class
+  // stamped onto the emitted material. (trigger echoes too; consumed by ingestJob.)
+  ref_kind?: string;
 }
 
 interface Summary {
@@ -99,6 +107,7 @@ async function process(
     sink?: "events" | "manual";
     keyword?: string;
     ai_assist?: boolean;
+    ref_kind?: "competitor" | "lifestyle";
   },
 ) {
   const items = await fetchItems(job, provided);
@@ -141,6 +150,13 @@ async function process(
     } else {
       sum.errors.push(`with_providers=${wpRegion} requested but tmdb_watch_providers is disabled`);
     }
+  }
+
+  // RAZ-43: stamp the inspiration class onto the emitted material. Payload is
+  // field-extensible by contract (jsonb + field_map), so no schema bump. Typed on
+  // RawMaterial (no cast) so a field-explicit refactor cannot silently drop it.
+  if (sel?.ref_kind) {
+    for (const m of fresh) m.ref_kind = sel.ref_kind;
   }
 
   const events = fanOut(job, fresh);
@@ -267,22 +283,71 @@ async function runPromote(body: RunBody, sum: Summary) {
   }
 }
 
-// RAZ-36. Read-only: resolve refs + catalog into work for n8n. Writes nothing.
+// RAZ-36/RAZ-43 (rewritten after 2026-07-19 review). Resolves refs + catalog into
+// work for n8n. Scheduler state lives fully in SQL:
+//   scope "due" ("daily" = deployed-dispatcher alias) -> ref_harvest_claim() —
+//     ONE atomic statement claims due rows AND advances next_run_at on the slot grid
+//     (gate-joined, FOR UPDATE SKIP LOCKED). No race, no drift, no partial advance,
+//     no swallowed per-row failure: a claim that fails plans nothing and moves nothing.
+//   scope "all" / ref_ids picks -> read-only, nothing advances.
+//   scope "triggered" -> read-only; REQUIRES pages + trend (a triggered pull without
+//     a page narrowing would fire every trigger_rule row on every trend — paid BD jobs;
+//     without trend, its events would carry no lineage).
+// Trend lineage is stamped ONLY on triggered plans — a stray trend on a due plan must
+// not write false correlation ids into the append-only stream.
 async function runHarvestPlan(body: RunBody) {
-  const refs = await loadRefRows(SUPABASE_URL, SERVICE_KEY, {
-    scope: body.scope ?? (body.ref_ids?.length ? "all" : "daily"),
-    ref_ids: body.ref_ids,
-    pages: body.pages,
-  });
-  const { jobs, skipped } = buildHarvestPlan(loadCatalog(), refs);
+  const requested = body.scope ?? (body.ref_ids?.length ? "all" : "due");
+  const scope = requested === "daily" ? "due" : requested;
+  if (scope !== "due" && scope !== "all" && scope !== "triggered") {
+    throw new BadRequest(`unknown harvest_plan scope "${requested}" — use due | all | triggered`);
+  }
+
+  let refs: RefRow[];
+  let advanced = 0;
+  if (scope === "due") {
+    refs = await claimDueRefs();
+    advanced = refs.length;   // claim and advance are the same statement
+  } else {
+    if (scope === "triggered") {
+      if (!body.pages?.length) throw new BadRequest("triggered scope requires 'pages'");
+      if (!body.trend) throw new BadRequest("triggered scope requires 'trend' (correlation lineage)");
+    }
+    refs = await loadRefRows(SUPABASE_URL, SERVICE_KEY, {
+      scope,
+      ref_ids: body.ref_ids,
+      pages: body.pages,
+    });
+  }
+
+  const trend = scope === "triggered" ? body.trend ?? null : null;
+  const { jobs, skipped } = buildHarvestPlan(loadCatalog(), refs, trend);
+
   return {
     ok: true,
     mode: "harvest_plan",
+    scope,
     refs_considered: refs.length,
     jobs,
     skipped,          // surfaced, not swallowed — a ref that can't harvest must be visible
+    advanced,         // due rows atomically claimed+advanced (0 on read-only scopes)
     planned_at: new Date().toISOString(),
   };
+}
+
+// RAZ-43: the due path. ref_harvest_claim() (20260718_raz43_reference_cadence.sql) owns
+// selection + advancement atomically — same layering as api_gate_acquire (M0).
+async function claimDueRefs(): Promise<RefRow[]> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/ref_harvest_claim`, {
+    method: "POST",
+    headers: {
+      apikey: SERVICE_KEY,
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+  });
+  if (!res.ok) throw new Error(`ref_harvest_claim failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+  return (await res.json()) as RefRow[];
 }
 
 async function run(body: RunBody) {
@@ -329,6 +394,15 @@ async function run(body: RunBody) {
         sink: body.sink,
         keyword: body.keyword,
         ai_assist: body.ai_assist,
+        // RAZ-43: echoed from the harvest_plan job — stamped onto the emitted material.
+        // Validated against the contract enum: the append-only stream must never store
+        // a mangled echo (review finding 2026-07-19). Invalid values are surfaced, not
+        // silently written or silently dropped.
+        ref_kind: body.ref_kind === "competitor" || body.ref_kind === "lifestyle"
+          ? body.ref_kind
+          : (body.ref_kind !== undefined
+              ? (sum.errors.push(`ignoring invalid ref_kind "${body.ref_kind}"`), undefined)
+              : undefined),
       });
     } catch (e) {
       sum.errors.push((e as Error).message);

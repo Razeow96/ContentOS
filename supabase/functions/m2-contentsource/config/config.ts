@@ -47,16 +47,21 @@ export async function loadArticleRows(supabaseUrl: string, serviceKey: string): 
   return rows.filter((r) => on.has(r.page_id));
 }
 
-// page_reference_sources rows to harvest, gated by page_source_settings like the
-// material subs. scope="daily" = the nightly schedule; ref_ids = an on-demand pick.
+// page_reference_sources rows for READ-ONLY plan scopes, gated by page_source_settings
+// like the material subs. RAZ-43 (post-review): the DUE path does NOT come through here —
+// due rows are claimed+advanced atomically by ref_harvest_claim() in SQL (see index.ts
+// claimDueRefs). This loader serves:
+//   "triggered" = rows with a trigger_rule (fired by a trend event; caller must narrow
+//                 with pages — enforced in runHarvestPlan).
+//   "all"       = no cadence filter; ref_ids = an on-demand pick.
 export async function loadRefRows(
   supabaseUrl: string,
   serviceKey: string,
-  opts: { scope?: "daily" | "all"; ref_ids?: number[]; pages?: string[] },
+  opts: { scope?: "all" | "triggered"; ref_ids?: number[]; pages?: string[] },
 ): Promise<RefRow[]> {
   const h = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
   let q = `${supabaseUrl}/rest/v1/page_reference_sources?enabled=eq.true&select=*`;
-  if (opts.scope === "daily") q += `&harvest_schedule=eq.daily`;
+  if (opts.scope === "triggered") q += `&trigger_rule=not.is.null`;
   if (opts.ref_ids?.length) q += `&id=in.(${opts.ref_ids.join(",")})`;
   if (opts.pages?.length) q += `&page_id=in.(${opts.pages.map((p) => `"${p}"`).join(",")})`;
 
@@ -78,9 +83,13 @@ export async function loadRefRows(
 export function buildHarvestPlan(
   catalog: MaterialSource[],
   refs: RefRow[],
+  // RAZ-43: present on trend-triggered plans — the trend's correlation lineage rides
+  // job → worker → ingest so the emitted events trace to the TrendDetected, not a fresh id.
+  trend: Record<string, unknown> | null = null,
 ): { jobs: HarvestJob[]; skipped: { ref_id: number; platform: string; reason: string }[] } {
   const jobs: HarvestJob[] = [];
   const skipped: { ref_id: number; platform: string; reason: string }[] = [];
+  const trig = triggerFrom(trend);
 
   for (const r of refs) {
     const src = catalog.find(
@@ -151,8 +160,13 @@ export function buildHarvestPlan(
       window_days: r.window_days,
       cap: r.cap,
       // Both strategies are applied on the ingest path (normalize.ts applyStrategy).
-      // n8n echoes these three fields back so the selection needs no extra DB read.
+      // n8n echoes these fields back so the selection needs no extra DB read.
       strategy_supported: r.strategy === "latest_n" || r.strategy === "best_performing",
+      // RAZ-43: inspiration class + optional trend lineage, echoed back on ingest.
+      // No fallback: the column is NOT NULL DEFAULT 'competitor' — re-encoding the
+      // default here would hide drift if the DB default ever changes (review 2026-07-19).
+      ref_kind: r.ref_kind,
+      trigger: trig,
     });
   }
   return { jobs, skipped };

@@ -70,8 +70,10 @@ create index if not exists idx_content_queue_page_status on content_queue (page,
 -- trend_events/source_events live in the M1/M2 records — on a clean rebuild,
 -- (re)create this view AFTER those tables exist.
 create or replace view event_trace as
-  select 'trend'::text  as stream, event_id, event_type, aggregate_id, correlation_id, causation_id, occurred_at, payload from trend_events
+  select 'trend'::text   as stream, event_id, event_type, aggregate_id, correlation_id, causation_id, occurred_at, payload from trend_events
   union all
-  select 'source'::text as stream, event_id, event_type, aggregate_id, correlation_id, causation_id, occurred_at, payload from source_events
+  select 'source'::text  as stream, event_id, event_type, aggregate_id, correlation_id, causation_id, occurred_at, payload from source_events
   union all
-  select 'demo'::text   as stream, event_id, event_type, aggregate_id, correlation_id, causation_id, occurred_at, payload from demo_events;
+  select 'content'::text as stream, event_id, event_type, aggregate_id, correlation_id, causation_id, occurred_at, payload from content_events  -- RAZ-46
+  union all
+  select 'demo'::text    as stream, event_id, event_type, aggregate_id, correlation_id, causation_id, occurred_at, payload from demo_events;

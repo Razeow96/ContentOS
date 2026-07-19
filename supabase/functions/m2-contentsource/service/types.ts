@@ -54,7 +54,7 @@ export interface MaterialSource {
   notes?: string;
 }
 
-// One row from page_reference_sources (a reference page to harvest) — RAZ-36.
+// One row from page_reference_sources (a reference page to harvest) — RAZ-36 / RAZ-43.
 export interface RefRow {
   id: number;
   page_id: string;
@@ -64,7 +64,14 @@ export interface RefRow {
   window_days: number | null;
   cap: number | null;
   enabled: boolean;
-  harvest_schedule: "daily" | "on_demand";
+  /** RAZ-43: user-set. null = on-demand only (fires via ref_ids picks). */
+  cadence: "daily" | "weekly" | "monthly" | null;
+  /** RAZ-43: due marker; ticker selects enabled AND next_run_at <= now(). */
+  next_run_at: string | null;
+  /** RAZ-43: user-set string; null = scheduled only. Non-null = also fires on a trend event. */
+  trigger_rule: string | null;
+  /** RAZ-43: inspiration class, carried into the SourceEnriched payload. */
+  ref_kind: "competitor" | "lifestyle";
 }
 
 // One unit of work handed to n8n by harvest_plan mode. Self-contained on purpose:
@@ -83,6 +90,10 @@ export interface HarvestJob {
   window_days: number | null;
   cap: number | null;
   strategy_supported: boolean; // false = scrapes, but ranking not implemented yet
+  // RAZ-43: echoed back by the worker on ingest so the payload carries the
+  // inspiration class and (when trend-triggered) the trend's correlation lineage.
+  ref_kind: string;
+  trigger: { correlation_id: string; causation_id: string | null } | null;
 }
 
 // One unit of work handed to n8n by search_plan mode. Same contract as HarvestJob (the
@@ -153,6 +164,10 @@ export interface RawMaterial {
   engagement: Record<string, unknown> | null;
   enrichment: Record<string, unknown> | null;
   external_id: string | null;
+  // RAZ-43: inspiration class, stamped on the ingest path for reference_post material.
+  // Optional and typed here so a field-explicit refactor of fanOut/writer cannot
+  // silently drop it (review finding 2026-07-19).
+  ref_kind?: "competitor" | "lifestyle";
   raw: unknown;
 }
 

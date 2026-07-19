@@ -1,95 +1,105 @@
 # m2-contentsource — M2 Content Sources Edge Function
 
-Turns reference **material** into `SourceEnriched` events (contract: *SourceEnriched v1*). Material, not signal — this is what a post is built *from*, given a topic. Mirrors the `m1-trend` architecture: heavy logic here, n8n only schedules/orchestrates and reports.
+Turns reference **material** into `SourceEnriched` events (contract: *SourceEnriched v1*, Rule 3 amended 2026-07-18: text inspiration-only / media reusable inside transformative composition). Material, not signal — this is what a post is built *from*, given a topic. Mirrors the `m1-trend` architecture: heavy logic here, n8n only schedules/orchestrates and reports.
 
 ## Flow
 
 ```
-n8n (schedule / trend webhook / Bright Data snapshot)
+n8n (schedule / trend webhook / Bright Data snapshot / manual tool)
   → POST this function
-      run mode:    catalog + page_material_sources → API/RSS adapters → normalize → dedup → fan-out → source_events
-      ingest mode: raw items handed in (Bright Data / scrape) → normalize → dedup → fan-out → source_events
+      run mode:     catalog + page_material_sources + page_article_sources → adapters → normalize → dedup → fan-out → source_events
+      ingest mode:  raw items handed in (BD harvest / scrape) → normalize → [strategy] → dedup → fan-out → source_events
   → INSERT into source_events fires the Supabase webhook → downstream (M3+)
 ```
 
-## Three invocation modes (POST body)
+## Six invocation modes (POST body)
 
-- **`{ "mode": "run" }`** — scheduled or trend-driven. Optional `"trend": <TrendDetected payload>` carries correlation/causation for enrichment (RAZ-26). Runs `api`/`rss` catalog sources subscribed via `page_material_sources`.
-- **`{ "mode": "ingest", "source": "reference_harvest", "pages": ["p1"], "items": [ ...raw... ], "trigger": null }`** — n8n hands in already-fetched raw items (Bright Data reference harvest RAZ-36, scrape-mode articles RAZ-25). Function only normalizes → dedup → emit.
-- **`{ "mode": "search", "keyword": "...", "sink": "events"|"manual", "sources": [...], "pages": [...], "ai_assist": bool }`** — keyword fan-out. `sink="events"` = autonomous, dedups + fans out + writes `source_events` (RAZ-26). `sink="manual"` = isolated store `manual_search_results`, **no dedup, no fan-out, never source_events** (RAZ-37). Omit `sources` and only cheap in-function sources run; Bright Data must be named explicitly.
-- **`{ "mode": "harvest_plan", "scope": "daily"|"all", "ref_ids": [1,2], "pages": [...] }`** — READ-ONLY, writes nothing (RAZ-36). Returns `{ jobs, skipped, refs_considered }`.
+- **`{ "mode": "run" }`** — scheduled or trend-driven. Optional `"trend": <TrendDetected payload>` carries correlation/causation (RAZ-26). Runs `api`/`rss` catalog sources subscribed via `page_material_sources` + article feeds from `page_article_sources` (RAZ-25 — rss parsed in-function; scrape via Web Unlocker).
+- **`{ "mode": "ingest", "source": "bd_facebook", "pages": ["p1"], "items": [...], "strategy": "...", "window_days": n, "cap": n, "ref_kind": "competitor"|"lifestyle", "trigger": {...}|null }`** — n8n hands in already-fetched raw items (BD reference harvest RAZ-36/43, scrape articles). Normalize → applyStrategy → dedup → emit. `ref_kind` is validated against the contract enum (invalid echo surfaced in errors, never written); `trigger` carries trend lineage into the events.
+- **`{ "mode": "search", "keyword": "...", "sink": "events"|"manual", "sources": [...], "pages": [...], "ai_assist": bool }`** — keyword fan-out. `sink="events"` = autonomous (RAZ-26); `sink="manual"` = isolated `manual_search_results`, **no dedup, no fan-out, never source_events** (RAZ-37). Bright Data is OPT-IN by name.
+- **`{ "mode": "search_plan", "keyword": "...", "sources": [...], "cap": n, "sink": ..., "ai_assist": bool }`** — READ-ONLY async twin of search for BD keyword DISCOVERY (can't fit the sync budget). Hands n8n ready-to-call `/trigger` jobs; worker echoes `sink`/`keyword` back into `ingest`.
+- **`{ "mode": "promote", "ids": [...], "pages": [...] }`** — RAZ-37. The ONLY bridge out of `manual_search_results`: operator-chosen rows → SourceEnriched. Human-initiated: fresh correlation_id, causation null.
+- **`{ "mode": "harvest_plan", "scope": "due"|"daily"|"all"|"triggered", "ref_ids": [1,2], "pages": [...], "trend": {...} }`** — RAZ-36/RAZ-43. ⚠ scope `due` (alias `daily`) **claims and advances** due rows atomically via `ref_harvest_claim()` — NOT a dry run; each call consumes the due slots it returns. `all`/`ref_ids` are read-only; `triggered` is read-only and REQUIRES `pages`+`trend`. Unknown scope = 400. Returns `{ scope, jobs, skipped, refs_considered, advanced }`.
 
-## harvest_plan — why it exists
+## harvest_plan + the scheduler (RAZ-43, revised 2026-07-19)
 
-n8n **cannot read `sources.json`**: it's bundled into this function. But the harvest needs `dataset_id` + `discover_by` per platform. Rather than duplicate ids into n8n (breaks *config is data, not code*) or make n8n join ref-rows against the catalog (logic in the orchestrator — a CLAUDE.md smell), the function does the join and hands n8n **ready-to-execute jobs**: `trigger_url` fully formed, `inputs` built, `page_id` to ingest back to. n8n holds zero config and makes zero decisions; it only does the slow async I/O n8n is actually for.
+n8n **cannot read `sources.json`** (bundled here), so the function joins ref rows against the catalog and hands n8n **ready-to-execute jobs** (`trigger_url` formed, `inputs` built, `page_id`/`ref_kind`/`trigger` to echo back). n8n holds zero config, makes zero decisions.
 
-Each job carries `strategy`/`window_days`/`cap` and a `strategy_supported` flag. `cap` merges into the scraper's post-count input when it declares one (e.g. Facebook's `num_of_posts`). **`best_performing` is not implemented** — those refs still scrape, but engagement-ranking over `window_days` isn't built, so `strategy_supported` is `false`. Only `latest_n` is honoured today.
+**Scheduler state lives in SQL** ("one dumb ticker, smart table"): per-row `cadence` (daily|weekly|monthly, NULL = on-demand) + `next_run_at` (DEFAULT now(), CHECK-coupled to cadence so a scheduled row can never be born dead). The due path is `ref_harvest_claim()` (plpgsql, `api_gate_acquire` precedent): gate-joined, FOR UPDATE SKIP LOCKED (no race double-spend), steps from the STORED `next_run_at` on the slot grid (no drift; a 06:00 slot stays 06:00), WHILE-walks overdue rows to the first future slot (no catch-up spam), claim+advance in one transaction (no partial states). `harvest_schedule` is DROPPED — cadence is the only truth.
 
-`skipped` is returned, never swallowed: a ref with no catalog source, a disabled source, an unset `dataset_id`, or a `ref_url` that isn't a URL shows up there with a reason.
-
-Gating matches the material path — a ref only harvests if its page has `page_source_settings.sources_enabled = true`.
+Jobs carry `strategy`/`window_days`/`cap`/`strategy_supported` — **both `latest_n` and `best_performing` are implemented** (applyStrategy in normalize.ts: window filter drops undated posts, ranks by summed likes+comments+shares; views excluded per contract Rule 4 — never cross-platform). `cap` also caps the DISCOVER phase via `limit_per_input` (uncapped discover bills per record — learned 2026-07-16). `skipped` is returned, never swallowed. A ref only harvests if its page has `page_source_settings.sources_enabled = true`.
 
 ## Layout
 
-- `index.ts` — entry point, run/ingest branching.
-- `service/types.ts` — SourceEnriched + adapter types (must match the contract).
-- `service/normalize.ts` — raw → RawMaterial (via field_map) → fan-out to SourceEnriched.
-- `service/writer.ts` — insert into `source_events`.
-- `config/config.ts` — load catalog + `page_material_sources` (gated by `page_source_settings`), build jobs, ingest job.
-- `config/fieldmap.ts` — `getPath` / `mapField` helpers.
+- `index.ts` — entry, six-mode branching, `claimDueRefs`, `process` pipeline.
+- `service/types.ts` — SourceEnriched + RefRow/HarvestJob/SearchJob types (must match the contract).
+- `service/normalize.ts` — raw → RawMaterial (field_map) → applyStrategy → fan-out.
+- `service/writer.ts` — `source_events` insert + `manual_search_results` insert.
+- `service/manuel_search_ai.ts` — Claude relevance-ranking for ai_assist (defensive: failure returns input unchanged).
+- `config/config.ts` — catalog + subscriptions loaders (gated), job builders, search/harvest plans.
+- `config/fieldmap.ts` — `getPath`/`mapField` (fallback chains + composite specs; deliberately NOT shared with m1 — bounded contexts own their mappers).
 - `config/dedup.ts` — freshness via `source_material` (unique `dedup_key`,`window_day`).
-- `adapters/api.ts` — JSON REST (TMDB, listings). Auth via `auth_ref` (query or bearer).
-- `adapters/rss.ts` — RSS/XML feed parse.
-- `adapters/brightdata.ts` — ONE config-driven adapter for every Bright Data scraper.
-- `sources.json` — the material catalog. **Data only** — every "why" lives in this file.
+- `adapters/api.ts` — JSON REST (TMDB, watch-providers enrichment RAZ-24). Auth query|bearer.
+- `adapters/rss.ts` — RSS/XML parse (through guardedFetch).
+- `adapters/scrape.ts` — no-feed articles via BD Web Unlocker, Open-Graph extraction (RAZ-25).
+- `adapters/brightdata.ts` — ONE config-driven adapter for every BD scraper (sync prompt family only; url/keyword discover are async-only via n8n).
+- `sources.json` — the material catalog. **Data only.**
+- All third-party calls go through **guardedFetch** (m0 rate-limit gate: no budget row = denied; ledger = spend audit).
 
 ## The catalog contract (sources.json)
 
-`field_map` keys are OUR SourceEnriched fields; values are the dot-path into the source's response for one item. Targets: `title` (required), `summary`, `entities`, `image_url`, `media`, `url`, `lang`, `region`, `country`, `topic_tags`, `published_at`, `engagement`, `external_id`, `kind`. Literals wrap as `{"const": "..."}`. `image_base` prefixes relative image paths (TMDB `poster_path`). `kind` can also arrive per-subscription via a `page_material_sources` param.
+`field_map` keys are OUR SourceEnriched fields; values are dot-paths into the source's response. Targets: `title` (required), `summary`, `entities`, `image_url`, `media`, `url`, `lang`, `region`, `country`, `topic_tags`, `published_at`, `engagement`, `external_id`, `kind`. Literals wrap as `{"const": "..."}`. `image_base` prefixes relative paths (TMDB `poster_path`). Fallback chains (`["images.0","video_thumbnail"]`) and composite specs (`engagement: {likes:..., comments:...}`) supported.
 
 ### ⚠️ Verify a field_map against a REAL payload, not a plausible one
 
-Every field_map bug so far has been a plausible-looking key that the platform doesn't actually return, and each one failed *silently* — no error, just a null or a wrong value riding all the way into `source_events`.
+Every field_map bug so far was a plausible key the platform doesn't return, failing *silently*. Facebook (2026-07-16): `image_url` → `post_external_image` (link-preview, null on image posts — real one is `post_image`); `title` → `page_name` (the page, not the post); `hashtags` unmapped. "The scrape returned rows" is not verification — `select payload->'raw'` from `source_events` and check field by field.
 
-Facebook, caught on the first real harvest (2026-07-16), having been marked "VERIFIED" two days earlier:
+### ⚠️ external_id is load-bearing
 
-- `image_url` pointed at `post_external_image` — that's the **link-preview** image, null on a normal image post. The real one is `post_image`. The earlier "verification" used a sample with no images and generalised from it.
-- `title` pointed at `page_name` — the *page*, so all 10 posts came out titled "Let's Talk Movies". A FB post has no title; `title` and `summary` are both the caption now, by design.
-- `hashtags` was sitting there unmapped while `topic_tags` went null.
-
-The lesson: "the scrape returned rows" is not verification. Read the raw record's actual keys — the full payload is retained on every event, so `select payload->'raw'` from `source_events` and check field by field.
-
-### ⚠️ external_id is load-bearing — verify it against a real payload
-
-`dedup.ts` builds its key as `source|external_id`. A field_map path that **doesn't exist** in the real payload yields ONE shared key per source per day, so everything after the first item is silently dropped as a duplicate on the `sink="events"` path.
-
-This bit us for real (2026-07-16): all five AI scrapers mapped `external_id → response_id`, a field none of them return. Every AI answer keyed to `bd_perplexity|`, meaning only the first trend topic each day would have emitted. Real AI keys are `prompt`, `answer_text`, `url`, `citations`, `sources`, `timestamp`, `index` — so they now map `external_id → prompt` (= one answer per keyword per day, the grain we want). **Never trust a source on the events path until external_id resolves against real output.**
+`dedup.ts` keys on `source|external_id`. A path that doesn't exist in the real payload yields ONE shared key per source per day — everything after the first item silently drops as duplicate. Bit us 2026-07-16 (all five AI scrapers mapped `response_id`, which none return → now `external_id → prompt`). **Never trust a source on the events path until external_id resolves against real output.**
 
 ## Bright Data (`type: "brightdata"`)
 
-Sync endpoint `POST /datasets/v3/scrape?dataset_id=gd_...`, body `{"input":[...]}` — **not** the bare array `/trigger` takes. `dataset_id` comes from the dashboard (`/cp/datasets`); `gd_REPLACE_*` placeholders error defensively so one unset source never breaks a run. Bright Data is **OPT-IN**: it only runs when named in the request's `sources`, keeping the default TMDB search fast and free.
+Sync endpoint `POST /datasets/v3/scrape?dataset_id=gd_...`, body `{"input":[...]}`. `gd_REPLACE_*` placeholders error defensively. OPT-IN by name.
 
-Two families:
-
-- **`bd_input: "prompt"`** — AI-search. The keyword becomes the prompt. `bd_url` is **required**: every AI scraper declares `url` (the chat surface it drives) as a Required input alongside `prompt`; omit it and the scrape fails. All five are proven live — **Google AI Mode ~19s is fastest by 4x, prefer it as the default**; Perplexity ~78s leaves only ~30s of headroom against the 110s budget.
-- **`bd_input: "url"`** — social. Resolves `page_reference_sources` rows matching `platform`, then keyword-filters. **Async-only**: social scrapes reliably exceed the sync window (proven with Facebook >110s), so the in-function path fail-fast guards them. They run via the n8n harvest → `ingest` path (RAZ-36).
+- **`bd_input: "prompt"`** — AI-search, sync-capable. `bd_url` required. All five proven; **Google AI Mode ~19s is 4x fastest — default choice**; Perplexity ~78s.
+- **`bd_input: "url" | "keyword"`** — social/discover. **Async-only** (proven >110s): fail-fast guarded in the sync path; they run via harvest_plan/search_plan → Dispatcher → Worker → ingest.
 
 ### ⚠️ collect vs discover — the trap
 
-One `gd_` dataset = one scraper **GROUP** (e.g. "Instagram - Posts"). Each group exposes **both** `collect by URL` (you hand it exact item URLs — a tweet, a video, a pin) **and** `discover by X` (you hand it a seed like a profile and it FINDS the items). Same `dataset_id`; the mode is a query param: `&type=discover_new&discover_by=<method>`.
+One `gd_` dataset = one scraper GROUP exposing both `collect by URL` and `discover by X` (query param `&type=discover_new&discover_by=<method>`). Our model (profile ref_url → recent posts) is **discover** everywhere except Facebook (natively profile→posts in collect mode — a misleading first precedent). A `bd_*` social entry needs the **Posts** group's dataset_id + `bd_discover_by`. Adding a platform = one catalog entry, zero code.
 
-Our model is **profile ref_url → that page's recent posts**, which is **discover** on every platform except Facebook — `Facebook - Pages Posts by Profile URL` is natively profile→posts *in collect mode*. That's why it worked first try and set a misleading precedent for the rest.
-
-So a `bd_*` social entry needs the **Posts** group's dataset_id (not the Profiles group — that returns follower/bio metadata) plus `bd_discover_by`. `bd_discover_by` is confirmed against the dashboard for instagram/tiktok/linkedin; the rest are label-inferred and want a check against Bright Data's API docs on first real harvest.
-
-Adding a platform = **one catalog entry, zero code** — the adapter names no platform. Keep it that way.
-
-## Config lives in Supabase (add a source = insert a row, no redeploy)
+## Config lives in Supabase (add = insert a row, no redeploy)
 
 - `page_source_settings` — per-page gate (`sources_enabled`).
-- `page_material_sources` — which api/rss catalog sources run per page (+ params).
-- `page_reference_sources` — reference pages per page (platform, url, strategy, window, cap) — RAZ-36.
-- `page_article_sources` — article feeds/sites per page (mode rss|scrape) — RAZ-25.
+- `page_material_sources` — api/rss catalog sources per page (+ params).
+- `page_reference_sources` — reference pages per page: platform, ref_url, strategy, window_days, cap, **cadence, next_run_at, trigger_rule, ref_kind (competitor|lifestyle)** — RAZ-36/43.
+- `page_article_sources` — article feeds/sites per page (mode rss|scrape) — RAZ-25. Live TW set for jello (RAZ-52): 自由娛樂 · Yahoo奇摩娛樂 · Yahoo奇摩電影 · 放映週報 (rss); chinatimes/TVBS/SETN/DailyView recorded as scrape-disabled (no public RSS).
+- `api_rate_limits` — the spend gate: **no row for a hostname = DENIED**; adding the row IS the approval.
+
+## Identity setup — creating a character (Character Brain, RAZ-57)
+
+M3-owned config module (`char_*` tables), documented here as the operator guide. A page's voice = one character; the page subscribes to it. `char_field_catalog` defines every field below (types, constraints, interview questions, renderer bands) — a UI or Q&A flow renders from it.
+
+**To create a complete character, fill:**
+
+| # | Field | Rule |
+|---|---|---|
+| 1 | `char_key` | stable slug, e.g. `jello` |
+| 2 | `name` / `display_name` | full name / what followers call them |
+| 3 | `gender`, `age`, `birth_place`, `current_city`, `education` | profile basics (optional but recommended) |
+| 4 | `disc_picks` | **5–10 traits** from `char_trait_catalog` (40 DISC traits, D/I/S/C × 10) — invalid trait = rejected by trigger |
+| 5 | `speaking_language` | e.g. `zh-TW` |
+| 6 | `slang_level` | `none · low · medium · high · extreme` — governs injection from the three shared lexicons (`char_lexicons`: 46 shortforms · 50 mild_badwords · 40 localizers). Badwords only at ≥ medium AND where pillar register allows; **page hard rules always win** |
+| 7 | `voice_tone_energy` | `low · medium · high · very_high` |
+| 8 | `background_story` | one paragraph, ≈300 words (≤1200 chars) — this is the canon; the AI may never invent new life facts |
+| 9 | `skills` | up to 3 titles |
+| 10 | `interests` | up to 3 titles |
+| 11 | `is_template` | `true` = clone source for future characters |
+| 12 | **initial state** | one `char_current_state` row: `mood` (low→very_high) + optional note — the per-day variance driver |
+| 13 | **subscription** | one `page_character_subscriptions` row: page_id → char_key (one active per page) |
+
+Fastest path for a new page: clone a template (`insert … select` from an `is_template=true` row), tweak fields 2–10, add state + subscription. Reference filled example: character `jello` v1 (seed: `supabase/database/20260719_raz57_jello_seed.sql`).
 
 ## Deploy
 
@@ -97,12 +107,12 @@ Adding a platform = **one catalog entry, zero code** — the adapter names no pl
 supabase functions deploy m2-contentsource
 ```
 
-Secrets (Supabase): `TMDB_API_KEY`, `BRIGHTDATA_API_KEY`, optional `ANTHROPIC_API_KEY` (AI-assist), plus auto-injected `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`.
+Secrets (Supabase): `TMDB_API_KEY`, `BRIGHTDATA_API_KEY`, `ANTHROPIC_API_KEY` (AI-assist), plus auto-injected `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`.
 
-**Gotcha:** Supabase bundles only *imported* files — a JSON catalog must be imported as `import x from "./x.json" with { type: "json" }` or it won't ship. Deno isn't installed locally; type-checking happens at deploy (the bundler).
+**Gotcha:** Supabase bundles only *imported* files — a JSON catalog must be imported as `import x from "./x.json" with { type: "json" }` or it won't ship. Deno isn't installed locally; type-checking happens at deploy.
 
-## Status (2026-07-16)
+## Status (2026-07-19)
 
-**Deployed and live.** api/rss/ingest/brightdata adapters + run/ingest/search modes all in. TMDB search verified (titles only). Bright Data: AI-search family (5) proven live end-to-end; social wired for 10 platforms but **unproven** — it needs the RAZ-36 n8n harvest workflow, which is the next build. `bd_quora` / `bd_threads` still need dataset_ids.
+**Deployed and live — all M2 build issues Done** (RAZ-20…26, 36, 37, 42, 43, 52, 57). Six modes in production. TW article feeds flowing (106 jello events on first pull, cross-feed dedup verified). Reference harvest v2: atomic claim scheduler proven (slot-grid restore + replay + typo-400 all observed). Character Brain seeded (40 traits, 136 lexicon entries, 15-field catalog, jello = character/template #1). Post-review hardening 2026-07-19: 10 findings fixed (see RAZ-43 comment).
 
-Open: RAZ-36 (async harvest), RAZ-25 (article rss/scrape), RAZ-24 (listings), promote-bridge for `manual_search_results`.
+Open: RAZ-27 (shadow verification vs Workflow A + cutover — owner-timed) · `bd_quora`/`bd_threads` dataset_ids · trend-triggered pull live-fire lands with RAZ-53 seeding.

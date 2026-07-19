@@ -1,5 +1,8 @@
 // Applies a source's field_map to one platform item, producing standard fields.
-// Identical helper to the m1-trend field mapper.
+// Started as the m1-trend field mapper; has since DIVERGED (fallback chains +
+// composite specs, added for real platform payloads). Deliberately not shared
+// across bounded contexts — each domain owns its mapper (rule of three applies
+// before extracting to m0).
 
 type Spec = string | string[] | { const: string } | Record<string, string>;
 
