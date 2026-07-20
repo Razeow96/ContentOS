@@ -8,12 +8,19 @@
 </head>
 <body>
   <aside class="nav">
-    <div class="brand">Content&nbsp;OS<span>admin · config plane</span></div>
-    <button class="navitem active" data-screen="trend">Trend</button>
-    <button class="navitem" data-screen="source">Content Source</button>
-    <button class="navitem" data-screen="infra">Infrastructure</button>
-    <button class="navitem" data-screen="drafts">Drafts</button>
-    <button class="navitem" data-screen="activity">Activity</button>
+    <div class="brand">Content&nbsp;OS<span>admin · observability</span></div>
+    <div class="navgroup">
+      <button class="navdomain" data-domain="infastructure">Infrastructure</button>
+      <div class="navsub collapsed" data-sub="infastructure">
+        <button class="navitem active" data-screen="logs">Logs</button>
+        <button class="navitem" data-screen="ratelimit">Rate-limit</button>
+      </div>
+      <button class="navdomain" data-domain="trend">Trend</button>
+      <div class="navsub collapsed" data-sub="trend">
+        <button class="navitem" data-screen="campaign">Campaign</button>
+        <button class="navitem" data-screen="trend-feed">Trend-feed</button>
+      </div>
+    </div>
     <div class="navfoot">
       <div id="conn" class="conn">connecting…</div>
     </div>
@@ -27,6 +34,6 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

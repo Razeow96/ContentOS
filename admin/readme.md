@@ -2,6 +2,8 @@
 
 Operator UI over the `page_*` config tables. **Additional requirement**, not ADR-001 scope. Local-only: no auth, no deploy, no build step.
 
+> **Before any design change in `/admin`, read [`designlearnrules.md`](designlearnrules.md)** — binding owner rules (nav, pagination, constant-height tables, consistent cell font) that every screen must obey.
+
 ## Run
 
 ```
@@ -54,7 +56,34 @@ Saving replaces the campaign's rows wholesale (delete + insert). Config rows car
 
 Rows predating campaigns show under **Ungrouped**, read-only — grouping them automatically would be a guess.
 
+## Structure (ES modules, no build)
+
+Plain ES modules served statically — no bundler. `index.html` loads `config.js` (a normal script that sets `window.CONTENT_OS_CONFIG`) then `app.js` as `<script type="module">`.
+
+```
+admin/
+  index.html        # shell: nav buttons + <div id="screen"> mount
+  app.js            # router + boot only (nav → screen.render(), campaign banner)
+  lib/
+    api.js          # DATA kit  — db() PostgREST, fn() edge functions, loadCatalog(), auth headers
+    ui.js           # PRESENTATION kit — $, esc, fmtTs, table(), toast(), banner()
+    nav.js          # shared nav state — isActive() (stale-guard), rerender()
+  pages/
+    m1-trend.js     # each screen is a module exporting render() (+ its own local state)
+    m2-source.js
+    m0-infra.js
+    m0-activity.js
+    m3-drafts.js
+```
+
+**`lib/*` = the reusable kits** (write once, every screen imports them). **`pages/mN-*.js` = one screen each**, built *from* the kits, holding only what's unique to its domain (which tables/queries, its layout, its wiring). Pages never import each other or `app.js`; cross-screen coordination (global re-render + banner) goes through `lib/nav.js`.
+
+**Add a screen:** create `pages/…`, add a nav `<button data-screen="…">` in `index.html`, register it in the `SCREENS` map in `app.js`.
+
 ## Screens
 
 - **Trend** (RAZ-39) — gates, campaigns, read-only trends feed.
 - **Content Source** (RAZ-40) — search + review half shipped (manual keyword search, promote/discard); config half (adapter board, campaign tabs, gates, run-now) in progress.
+- **Infrastructure** (RAZ-42) — M0 rate-limit budgets + the outbound-call ledger (`api_request_log`).
+- **Activity** (RAZ-58) — M0 `run_log`: every invocation (source, caller IP, status, duration) + date/source filters + a per-run drill-down.
+- **Drafts** (RAZ-60) — M3 `content_items`: generated drafts + validator flags, click-to-expand caption/evidence. Read-only.

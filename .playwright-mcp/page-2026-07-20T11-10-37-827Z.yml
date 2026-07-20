@@ -1,0 +1,114 @@
+- generic [ref=f1e1]:
+  - complementary [ref=f1e2]:
+    - generic [ref=f1e3]:
+      - text: Content OS
+      - generic [ref=f1e4]: admin · observability
+    - generic [ref=f1e5]:
+      - button "Infrastructure ▸" [ref=f1e6] [cursor=pointer]
+      - button "Trend ▸" [ref=f1e7] [cursor=pointer]
+      - generic [ref=f1e11]:
+        - button "Campaign" [active] [ref=f1e12] [cursor=pointer]
+        - button "Trend-feed" [ref=f1e13] [cursor=pointer]
+    - generic [ref=f1e8]: connected · qbxpizyemqwcokdkpbqe
+  - main [ref=f1e10]:
+    - generic [ref=f1e14]:
+      - heading "Trend › Campaign" [level=1] [ref=f1e802]
+      - paragraph [ref=f1e803]: Which platform each page listens to, grouped as campaigns. A page is live the moment it is in a campaign — remove it to stop, delete the campaign to turn it off.
+      - generic [ref=f1e804]:
+        - generic [ref=f1e805]:
+          - heading "Campaigns 6" [level=2] [ref=f1e906]:
+            - text: Campaigns
+            - generic [ref=f1e807]: "6"
+          - generic [ref=f1e808]:
+            - button "Create" [ref=f1e809] [cursor=pointer]
+            - button "Done" [ref=f1e907] [cursor=pointer]
+        - generic [ref=f1e811]: Edit mode — click a campaign to change its platform, settings or pages; ✕ deletes it.
+        - generic [ref=f1e812]:
+          - table [ref=f1e909]:
+            - rowgroup [ref=f1e910]:
+              - row [ref=f1e911]:
+                - columnheader "Campaign" [ref=f1e912]
+                - columnheader "Platform" [ref=f1e913]
+                - columnheader "Settings" [ref=f1e914]
+                - columnheader "Subscribers" [ref=f1e915]
+                - columnheader "Created" [ref=f1e916]
+                - columnheader [ref=f1e917]
+              - row [ref=f1e918]:
+                - cell "ungrouped" [ref=f1e919]
+                - cell "google_trends_daily" [ref=f1e921]
+                - cell "region=TW · language=zh · country=Taiwan" [ref=f1e922]
+                - cell "jello_topmovie_svs" [ref=f1e923]
+                - cell "2026-07-11" [ref=f1e924]
+                - cell [ref=f1e925]
+              - row [ref=f1e926]:
+                - cell "ungrouped" [ref=f1e927]
+                - cell "youtube" [ref=f1e929]
+                - cell "region=TW · language=zh · country=Taiwan · chart=mostPopular · max_results=25" [ref=f1e930]
+                - cell "jello_topmovie_svs" [ref=f1e931]
+                - cell "2026-07-11" [ref=f1e932]
+                - cell [ref=f1e933]
+              - row [ref=f1e934]:
+                - cell "ungrouped" [ref=f1e935]
+                - cell "google_trends_daily" [ref=f1e937]
+                - cell "region=TW · language=zh · country=Taiwan" [ref=f1e938]
+                - cell "daily_movie_edc" [ref=f1e939]
+                - cell "2026-07-11" [ref=f1e940]
+                - cell [ref=f1e941]
+              - row [ref=f1e942]:
+                - cell "ungrouped" [ref=f1e943]
+                - cell "youtube_film off" [ref=f1e945]:
+                  - text: youtube_film
+                  - generic [ref=f1e946]: "off"
+                - cell "region=US · language=en · country=USA · max_results=25" [ref=f1e947]
+                - cell "mateo" [ref=f1e948]
+                - cell "2026-07-12" [ref=f1e949]
+                - cell [ref=f1e950]
+              - row [ref=f1e951]:
+                - cell "ungrouped" [ref=f1e952]
+                - cell "youtube_film" [ref=f1e954]
+                - cell "region=TW · language=zh · country=Taiwan · max_results=25" [ref=f1e955]
+                - cell "jello_topmovie_svs" [ref=f1e956]
+                - cell "2026-07-12" [ref=f1e957]
+                - cell [ref=f1e958]
+              - row [ref=f1e959]:
+                - cell "ungrouped" [ref=f1e960]
+                - cell "youtube_film off" [ref=f1e962]:
+                  - text: youtube_film
+                  - generic [ref=f1e963]: "off"
+                - cell "region=TW · language=zh · country=Taiwan · max_results=25" [ref=f1e964]
+                - cell "daily_movie_edc" [ref=f1e965]
+                - cell "2026-07-12" [ref=f1e966]
+                - cell [ref=f1e967]
+              - row [ref=f1e968]:
+                - cell [ref=f1e969]
+                - cell [ref=f1e970]
+                - cell [ref=f1e971]
+                - cell [ref=f1e972]
+                - cell [ref=f1e973]
+                - cell [ref=f1e974]
+              - row [ref=f1e975]:
+                - cell [ref=f1e976]
+                - cell [ref=f1e977]
+                - cell [ref=f1e978]
+                - cell [ref=f1e979]
+                - cell [ref=f1e980]
+                - cell [ref=f1e981]
+              - row [ref=f1e982]:
+                - cell [ref=f1e983]
+                - cell [ref=f1e984]
+                - cell [ref=f1e985]
+                - cell [ref=f1e986]
+                - cell [ref=f1e987]
+                - cell [ref=f1e988]
+              - row [ref=f1e989]:
+                - cell [ref=f1e990]
+                - cell [ref=f1e991]
+                - cell [ref=f1e992]
+                - cell [ref=f1e993]
+                - cell [ref=f1e994]
+                - cell [ref=f1e995]
+          - generic [ref=f1e996]:
+            - generic [ref=f1e997]: page 1 of 1 · 6 campaigns
+            - generic [ref=f1e998]:
+              - button "Prev" [disabled] [ref=f1e999]
+              - button "Next" [disabled] [ref=f1e1000]

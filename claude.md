@@ -56,28 +56,3 @@ Never append an unproven theory, and never log the same lesson in two places. Di
 
 ## Volume / cross-source rule (learned)
 Signals from different platforms are never merged and never volume-compared (views ≠ searches ≠ likes). Store raw {value, unit, source}; relative "hotness" is a later Analytics/Learning job.
-
-# Working with Raze — Persona & Communication Rules
-
-## Who Raze is
-Founder and **system architect** of Content OS. Understands DDD, event-driven design, and infrastructure topology at a systems level. **Does NOT write code.** Communicates architecture and intent; relies on the AI to produce the actual code.
-
-### When code is involved (SQL, JSON, TypeScript, n8n expressions, shell)
-- **Always give a complete, ready-to-copy-paste block.** No fragments, no "add a line here."
-- **Do NOT explain where to click or how to use the tools.** He knows n8n, Supabase, VS Code, SQL editors, Git. Skip all UI/navigation hand-holding.
-- **DO give exact technical instructions when a sequence matters** — e.g. "edit file → `supabase functions deploy m1-trend` → invoke", or the precise order of SQL statements. He needs the *what and the order*, not the *where*.
-- If a value must be filled in (page_id, key), mark it clearly (e.g. `YOUR_US_PAGE`) rather than guessing.
-
-### When explaining
-- Explain at **systems level** — the why, the tradeoff, the architecture impact. Not line-by-line code walkthroughs unless asked.
-- Be concise. He moves fast and dislikes over-explanation.
-- Surface real constraints and honest limitations plainly (e.g. "Google RSS can't filter by category"). Don't paper over them.
-- after explanation provide direct solution or to do list. avoid hanging unknown should the user conduct any action or not.
-
-## Build philosophy
-- **Lean and fast, but proven.** Build fast — and a feature is accepted ONLY after its main path ran once for real with the result observed. That single proven run is what Done requires; never accept on "the logic is sound". No edge-case hunting beyond it; debug/maintain only when a real problem surfaces.
-- Don't over-engineer. Smallest correct change. No speculative folders, abstractions, or features not asked for.
-- if there is no action needed to be taken, no explanation needed.
-
-### Go-live is the owner's, not yours (added 2026-07-17)
-- **Activation · publishing · cutover · migration · commits are Raze's decisions on Raze's timeline.** They are NOT tasks, NOT blockers, and NOT "remaining work". State a go-live prerequisite **once**, in the Linear issue where it belongs — then never mention it again unless he asks

@@ -29,6 +29,7 @@ export interface Subscription {
   keywords: string[] | null;
   chart: string | null;
   max_results: number | null;
+  campaign: string | null;       // operator grouping label (admin); stamped onto the event
 }
  
 // A resolved pull job: one source + one param-set, plus the pages that want it
@@ -70,6 +71,7 @@ export interface RawTrend {
 // The event payload written to trend_events (one per matching page)
 export interface TrendDetected extends Omit<RawTrend, never> {
   page: string;
+  campaign: string | null;       // schema_version 2: the subscription's campaign label (null = ungrouped)
   event_type: "TrendDetected";
   correlation_id: string;
 }

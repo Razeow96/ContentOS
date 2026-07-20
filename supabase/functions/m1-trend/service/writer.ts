@@ -12,7 +12,7 @@ export async function writeTrendEvents(
  
   const rows = events.map((e) => ({
     event_type: "TrendDetected",
-    schema_version: 1,
+    schema_version: 2,   // v2: payload adds `campaign` (additive; consumers ignoring it are unaffected)
     aggregate_id: e.raw_trend_id,
     correlation_id: e.correlation_id,
     causation_id: null,

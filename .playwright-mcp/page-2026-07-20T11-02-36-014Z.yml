@@ -1,0 +1,10 @@
+- generic [active] [ref=f1e1]:
+  - complementary [ref=f1e2]:
+    - generic [ref=f1e3]:
+      - text: Content OS
+      - generic [ref=f1e4]: admin · observability
+    - generic [ref=f1e5]:
+      - button "Infrastructure ▸" [ref=f1e6] [cursor=pointer]
+      - button "Trend ▸" [ref=f1e7] [cursor=pointer]
+    - generic [ref=f1e8]: connecting…
+  - main [ref=f1e10]

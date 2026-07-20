@@ -1,0 +1,2 @@
+[  203671ms] [ERROR] Access to fetch at 'https://qbxpizyemqwcokdkpbqe.supabase.co/functions/v1/m1-trend' from origin 'http://localhost:8777' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:8777/admin/:0
+[  203673ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://qbxpizyemqwcokdkpbqe.supabase.co/functions/v1/m1-trend:0

@@ -70,16 +70,46 @@ body {
 }
 .navitem:hover { background: var(--panel-2); color: var(--text); }
 .navitem.active { background: var(--accent-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+
+/* domain group: a parent row that expands to a sub-menu of screens */
+.navgroup { display: flex; flex-direction: column; gap: 2px; }
+.navdomain {
+  background: none; border: 0; color: var(--text); text-align: left;
+  padding: 9px 11px; border-radius: 6px; cursor: pointer; font: inherit; font-weight: 640;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.navdomain:hover { background: var(--panel-2); }
+.navdomain::after { content: "▸"; color: var(--faint); font-size: 10px; transition: transform .12s ease; }
+.navdomain.expanded::after { transform: rotate(90deg); }
+.navsub {
+  display: flex; flex-direction: column; gap: 2px;
+  margin: 2px 0 6px 10px; padding-left: 8px; border-left: 1px solid var(--line);
+}
+.navsub.collapsed { display: none; }
+.navsub .navitem { padding: 6px 11px; font-size: 12px; font-weight: 500; }
+
 .navfoot { margin-top: auto; }
 .conn { font-size: 11px; color: var(--faint); padding: 8px; word-break: break-all; }
 .conn.bad { color: var(--bad); }
 .conn.ok { color: var(--ok); }
 
 /* ---------- layout ---------- */
-.main { flex: 1; padding: 30px 34px; max-width: 1120px; }
+/* full content width — tables and text use all the space to the right */
+.main { flex: 1; padding: 30px 34px; min-width: 0; }
 h1 { font-size: 21px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 5px; }
 h2 { font-size: 14px; font-weight: 620; letter-spacing: -.01em; margin: 0 0 12px; }
-.sub { color: var(--muted); margin: 0 0 26px; max-width: 70ch; }
+/* design rule 6: the page description is a FIXED 2-line block (full width, long
+   text clamps with …) so every page's table starts at the same vertical spot. */
+.sub {
+  color: var(--muted);
+  margin: 0 0 24px;
+  line-height: 1.55;
+  min-height: 3.1em;                 /* always reserve 2 lines */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 .card {
   background: var(--panel);
@@ -100,7 +130,22 @@ h2 { font-size: 14px; font-weight: 620; letter-spacing: -.01em; margin: 0 0 12px
   background: var(--accent);
 }
 .hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 2px 0 16px; max-width: 78ch; }
-.hint .mono, .sub .mono { color: var(--text); }
+.hint .mono, .sub .mono, .cardhint .mono { color: var(--text); }
+
+/* design rule 6: fixed-height in-card hint slot — one line, full width, present
+   on every card (blank when a page has nothing to say) so the table below always
+   starts at the same Y across pages. Longer text clamps rather than pushing down. */
+.cardhint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 1.5em;
+  margin: 0 0 14px;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 /* ---------- banner ---------- */
 .banner {
@@ -127,6 +172,14 @@ h2 { font-size: 14px; font-weight: 620; letter-spacing: -.01em; margin: 0 0 12px
 /* ---------- table ---------- */
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+/* design rule 5: every data cell is ONE size, and never wraps (a wrapped cell
+   makes rows different heights across pages). Long text ellipsizes via the
+   per-column max-width; it does not wrap. */
+td { font-size: 12.5px; white-space: nowrap; height: 42px; }
+td.mono, td .mono { font-size: 12.5px; }
+/* design rule 4: filler rows keep the box a constant 10-row height */
+tr.filler td { color: transparent; }
+tr.filler:hover td { background: none; }
 th {
   color: var(--faint);
   font-weight: 600;
@@ -144,6 +197,10 @@ tr:last-child td { border-bottom: 0; }
 
 /* clickable audit rows (Activity) get a hover cue */
 .actrow:hover td { background: var(--panel-2); }
+
+/* pager: page-of-N + prev/next under a paginated table */
+.pager { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-top: 14px; }
+.pager .btn { padding: 6px 13px; }
 
 /* ---------- links ---------- */
 a { color: var(--accent); text-decoration: none; font-weight: 500; }
@@ -265,6 +322,30 @@ input:focus, select:focus { outline: none; border-color: var(--accent); box-shad
 .toast.bad { border-left-color: var(--bad); }
 
 .empty { color: var(--faint); font-style: italic; padding: 8px 0; }
+
+/* ---------- subscribers popover (see-more, body-anchored so the table's
+   overflow never clips it and the row height never changes — rules 4 & 5) ---------- */
+.subsmore {
+  background: none; border: 0; color: var(--accent); cursor: pointer;
+  font: inherit; font-size: 12.5px; font-weight: 500; padding: 0;
+}
+.subsmore:hover { text-decoration: underline; }
+.popover {
+  position: absolute; z-index: 50;
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 8px;
+  min-width: 160px; max-width: 280px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+}
+.popover .prow { padding: 5px 8px; font-size: 12.5px; font-family: ui-monospace, Consolas, monospace; color: var(--text); border-radius: 5px; }
+.popover .prow + .prow { margin-top: 1px; }
+
+/* edit-mode row affordances on the Campaign screen */
+.camprow.editable:hover td { background: var(--panel-2); cursor: pointer; }
+.xdel { background: none; border: 0; color: var(--bad); cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 6px; border-radius: 5px; }
+.xdel:hover { background: rgba(248, 81, 73, .12); }
 
 /* ---------- recent-trends feed: topic anchors, meta recedes ---------- */
 .feeditem { padding: 10px 0; border-bottom: 1px solid var(--line); }

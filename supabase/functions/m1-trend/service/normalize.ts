@@ -53,7 +53,13 @@ export function fanOut(job: PullJob, trends: RawTrend[]): TrendDetected[] {
   const events: TrendDetected[] = [];
   for (const t of trends) {
     for (const sub of job.subscribers) {
-      events.push({ ...t, page: sub.page_id, event_type: "TrendDetected", correlation_id: crypto.randomUUID() });
+      events.push({
+        ...t,
+        page: sub.page_id,
+        campaign: sub.campaign ?? null,
+        event_type: "TrendDetected",
+        correlation_id: crypto.randomUUID(),
+      });
     }
   }
   return events;
