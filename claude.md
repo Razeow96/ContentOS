@@ -23,6 +23,7 @@ Trend Intelligence · Content Sources · Content Generation · Media Production 
 5. **Idempotent consumers.** Every subscriber dedups on `event_id` (a "seen log"), because delivery is at-least-once.
 6. **Correlation & causation.** `correlation_id` is minted at the head of a flow and copied to every downstream event; `causation_id` = the event that caused this one. This is how a flow is traced across domains.
 7. **Contract-first.** Every event type has a versioned contract (Linear doc) approved BEFORE its code is built. Additive change = bump schema_version; breaking change = new event_type (e.g. TrendDetectedV2).
+8. **Every execution path logs — mandatory, current AND future.** Every feature — edge function, n8n workflow, consumer — MUST emit an invocation record to the M0 observability log (`run_log`, via the `withRun` helper / the gate `log` endpoint): source, caller IP, action, status, `correlation_id`, outcome. No silent execution paths. This is a **security control, not just debugging**: the run log + the rate-limit gate/ledger (`api_request_log`) are the only two surfaces we monitor and audit for what ran, from where, and what it spent. A feature that runs without logging is NOT Done. (Tracked: RAZ observability issue.)
 
 ## Logic placement
 - **n8n is an orchestrator, not a logic engine.** Use it for scheduling, triggering, and status reporting only.
@@ -41,6 +42,17 @@ Not every domain owns state. An **aggregate** owns tables + enforces invariants 
 
 ## Definition of done (every feature)
 Migration applied · events flowing · consumers idempotent · contract + docs updated · artifacts in the repo working tree (committing is Raze's, on his timeline — mark Done in Linear without waiting for it) · legacy A/B/C unaffected.
+
+## Capturing a lesson (mandatory — added 2026-07-19)
+When a mistake is made AND its fix is found AND that fix has been **proven by a real run**, do all three:
+1. **Notify Raze** — state the mistake, the root cause, and the proof in one short block.
+2. **Propose the learned rule** — one or two lines, written as a rule for the future, not a story about the past. Wait for his approval before writing it.
+3. **On approval, append it** to the right scope:
+   - Domain-specific → `supabase/functions/<domain>/CLAUDE.md` under `## Learned rules` (auto-loads when work touches that folder).
+   - Global / cross-domain / working-style → `learnrules.md` at the repo root.
+   - Unsure which → it is domain-specific unless it would have prevented the same bug in another domain.
+
+Never append an unproven theory, and never log the same lesson in two places. Directory `CLAUDE.md` files carry invariants + learned rules only — deep knowledge stays in the domain `readme.md`.
 
 ## Volume / cross-source rule (learned)
 Signals from different platforms are never merged and never volume-compared (views ≠ searches ≠ likes). Store raw {value, unit, source}; relative "hotness" is a later Analytics/Learning job.

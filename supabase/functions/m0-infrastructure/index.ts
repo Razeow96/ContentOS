@@ -14,9 +14,10 @@
 
 import { acquire, report } from "./rate-limit/ratelimit.ts";
 import { providerOf } from "./rate-limit/config.ts";
+import { callerIp, logRun } from "./observability/runlog.ts";
 
 interface Body {
-  action?: "acquire" | "report";
+  action?: "acquire" | "report" | "log";
   provider?: string;
   method?: string;
   url?: string;
@@ -25,6 +26,14 @@ interface Body {
   status?: number;
   duration_ms?: number;
   records?: number;
+  // action:"log" — n8n reports one run_log row per workflow run (RAZ-58).
+  source?: string;
+  run_action?: string;
+  run_status?: string;
+  correlation_id?: string;
+  summary?: unknown;
+  error?: string;
+  caller_ip?: string;
 }
 
 const json = (body: unknown, status = 200) =>
@@ -47,6 +56,24 @@ Deno.serve(async (req) => {
       if (typeof body.log_id !== "number") return json({ ok: false, error: "report needs log_id" }, 400);
       await report(body.log_id, body.status ?? 0, body.duration_ms ?? 0, body.records);
       return json({ ok: true });
+    }
+
+    // action:"log" — n8n workflows log their run here (edge fns use withRun in-process).
+    // Invariant #8: every execution path logs. Best-effort — a logging failure is a 500
+    // to the caller but never denies anything.
+    if (body.action === "log") {
+      if (!body.source) return json({ ok: false, error: "log needs source" }, 400);
+      const log_id = await logRun({
+        source: body.source,
+        action: body.run_action ?? null,
+        caller_ip: body.caller_ip ?? callerIp(req),
+        correlation_id: body.correlation_id ?? null,
+        status: body.run_status ?? "ok",
+        summary: body.summary ?? null,
+        error: body.error ?? null,
+        duration_ms: body.duration_ms ?? null,
+      });
+      return json({ ok: true, log_id });
     }
 
     // default: acquire

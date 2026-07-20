@@ -31,6 +31,11 @@ note : treat linear as software documentation and project management including s
 - After any await that ends in a repaint, re-check the screen/state is still current; `finally` must reset busy state even when the follow-up reload throws.
 - A partition over catalog entries must be exhaustive — every entry lands in a bucket or renders as unknown, never silently dropped.
 
+## Hard output constraints are code, never prose (2026-07-19)
+- An LLM cannot count characters while it writes, and trained habits beat style bans. Any output constraint with "no room of error" (length ranges, forbidden characters, required fields) MUST be validated in code AFTER generation — one auto-revise pass, then flags on the row. Never trusted to the prompt alone.
+- Prose steers, the validator guarantees. Applies to every generative domain (M3 copy, M4 image prompts, Publishing captions), not just the one where it was found.
+- Proven: a draft came back 480 chars against an 800–1200 range, and dashes survived an explicit identity rule; the m3-generate validator fixed both classes systemically.
+
 ## API rate-limit gate
 - EVERY outbound API call, any platform, passes through the rate-limit setup BEFORE it is configured or fired. No direct raw calls from adapters or n8n.
 - Limits are budgets, not just req/sec: paid APIs bill per RECORD — a per-provider daily record/credit budget is what would have saved the trial.

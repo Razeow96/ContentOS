@@ -36,6 +36,7 @@ import { pullRss } from "./adapters/rss.ts";
 import { pullScrape } from "./adapters/scrape.ts";
 import { pullBrightData } from "./adapters/brightdata.ts";
 import type { MaterialJob, RawMaterial, RefRow } from "./service/types.ts";
+import { withRun } from "../m0-infrastructure/observability/runlog.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -459,41 +460,49 @@ const JSON_HEADERS = { ...CORS, "Content-Type": "application/json" };
 // Collapsing both into 500 made "promote without pages" look like a server crash.
 class BadRequest extends Error {}
 
-Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-  try {
-    // A body that fails to parse must NOT fall through to mode="run": that default
-    // pulls every subscribed API source and writes real events, so a malformed
-    // request silently performed a full TMDB pull instead of erroring (caught
-    // 2026-07-16 — it wrote 40 junk events). Bad input fails loudly now.
-    let body: RunBody = {};
-    if (req.method === "POST") {
-      const text = await req.text();
-      if (text.trim() !== "") {
-        try {
-          body = JSON.parse(text);
-        } catch (e) {
-          return new Response(
-            JSON.stringify({
-              ok: false,
-              error: `Body is not valid JSON: ${(e as Error).message}`,
-              bytes_received: text.length,
-            }),
-            { status: 400, headers: JSON_HEADERS },
-          );
+Deno.serve((req) => {
+  // OPTIONS preflight is not a run — keep it out of the log entirely.
+  if (req.method === "OPTIONS") return Promise.resolve(new Response(null, { status: 204, headers: CORS }));
+  return withRun("m2-contentsource", req, async (rl) => {
+    try {
+      // A body that fails to parse must NOT fall through to mode="run": that default
+      // pulls every subscribed API source and writes real events, so a malformed
+      // request silently performed a full TMDB pull instead of erroring (caught
+      // 2026-07-16 — it wrote 40 junk events). Bad input fails loudly now.
+      let body: RunBody = {};
+      if (req.method === "POST") {
+        const text = await req.text();
+        if (text.trim() !== "") {
+          try {
+            body = JSON.parse(text);
+          } catch (e) {
+            return new Response(
+              JSON.stringify({
+                ok: false,
+                error: `Body is not valid JSON: ${(e as Error).message}`,
+                bytes_received: text.length,
+              }),
+              { status: 400, headers: JSON_HEADERS },
+            );
+          }
         }
       }
+      const result = await run(body);
+      rl.action = body.mode ?? "run";
+      rl.summary = result;
+      rl.correlation_id = body.trigger?.correlation_id ??
+        (body.trend?.correlation_id as string | undefined) ?? null;
+      rl.status = result.ok ? "ok" : "error";
+      return new Response(JSON.stringify(result, null, 2), {
+        status: result.ok ? 200 : 207,
+        headers: JSON_HEADERS,
+      });
+    } catch (e) {
+      const bad = e instanceof BadRequest;
+      return new Response(JSON.stringify({ ok: false, error: (e as Error).message }), {
+        status: bad ? 400 : 500,
+        headers: JSON_HEADERS,
+      });
     }
-    const result = await run(body);
-    return new Response(JSON.stringify(result, null, 2), {
-      status: result.ok ? 200 : 207,
-      headers: JSON_HEADERS,
-    });
-  } catch (e) {
-    const bad = e instanceof BadRequest;
-    return new Response(JSON.stringify({ ok: false, error: (e as Error).message }), {
-      status: bad ? 400 : 500,
-      headers: JSON_HEADERS,
-    });
-  }
+  });
 });

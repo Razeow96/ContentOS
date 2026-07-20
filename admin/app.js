@@ -565,6 +565,256 @@ async function renderInfra(reuseBudgets) {
   $("#ifrefresh").addEventListener("click", () => renderInfra());
 }
 
+/* ---------------- drafts screen (M3 content_items — RAZ-60) ----------------
+ * Read-only review surface for M3 drafts (replaces the dropped Telegram ping).
+ * The validator FLAGS are the point — they are shown up front, not buried. Edit/
+ * approve/schedule is the owner's manual DB loop for now, by design.
+ */
+
+const drafts = { status: "draft", page: "", pillar: "", seq: 0, rows: [], pages: [], pillars: [], expanded: null };
+
+function flagTags(v) {
+  const f = (v && v.flags) || [];
+  if (!f.length) return `<span class="tag on">clean</span>` + (v && v.revised ? ` <span class="tag">revised</span>` : "");
+  const label = { range_violation: "range", pattern_violation: "dash", lexicon_violation: "word-DNA" };
+  return f.map((x) => `<span class="tag warn">${esc(label[x] || x)}</span>`).join(" ") + (v && v.revised ? ` <span class="tag">revised</span>` : "");
+}
+
+async function renderDrafts(reuse) {
+  const seq = ++drafts.seq;
+  const stale = () => seq !== drafts.seq || state.screen !== "drafts";
+  let rows = [];
+  try {
+    if (!reuse || !drafts.pages.length) {
+      const meta = await db("/content_items?select=page_id,pillar_id&limit=1000").catch(() => []);
+      drafts.pages = [...new Set((meta || []).map((r) => r.page_id))];
+      drafts.pillars = [...new Set((meta || []).map((r) => r.pillar_id))];
+    }
+    let q = `/content_items?select=*&order=created_at.desc&limit=200`;
+    if (drafts.status !== "all") q += `&status=eq.${encodeURIComponent(drafts.status)}`;
+    if (drafts.page) q += `&page_id=eq.${encodeURIComponent(drafts.page)}`;
+    if (drafts.pillar) q += `&pillar_id=eq.${encodeURIComponent(drafts.pillar)}`;
+    rows = await db(q);
+  } catch (e) {
+    if (stale()) return;
+    return ($("#screen").innerHTML = `<h1>Drafts</h1>
+      <div class="card"><h2>content_items unavailable</h2><p class="hint mono">${esc(e.message).slice(0, 200)}</p></div>`);
+  }
+  if (stale()) return;
+  drafts.rows = rows;
+
+  const rowHtml = (r) => {
+    const d = r.draft || {};
+    const yr = r.movie_year ? `（${r.movie_year}）` : "";
+    return `<tr class="draftrow" data-id="${r.id}" style="cursor:pointer">
+        <td class="mono">${esc(fmtTs(r.created_at, 5, 16))}</td>
+        <td class="mono">${esc(r.page_id)}</td>
+        <td class="mono">${esc(r.pillar_id)}</td>
+        <td>${esc(String(r.angle_entity ?? "—"))}${esc(yr)}</td>
+        <td class="mono">${(r.validation && r.validation.char_count) ?? "—"}</td>
+        <td>${flagTags(r.validation)}</td>
+      </tr>` + (drafts.expanded === r.id ? `<tr><td colspan="6" style="background:var(--panel-2)">${draftBody(r)}</td></tr>` : "");
+  };
+
+  $("#screen").innerHTML = `<h1>Drafts</h1>
+    <p class="sub">M3 <span class="mono">content_items</span> — generated drafts + validator flags (RAZ-60). Read-only; the edit / schedule loop stays in the DB for now.</p>
+    <div class="card">
+      <div class="spread"><h2>Drafts <span class="tag">${rows.length}</span></h2>
+        <div class="row">
+          <select id="dstatus">
+            ${["draft", "all"].map((s) => `<option value="${s}" ${drafts.status === s ? "selected" : ""}>${s === "all" ? "all statuses" : s}</option>`).join("")}
+          </select>
+          <select id="dpage"><option value="">all pages</option>
+            ${drafts.pages.map((p) => `<option value="${esc(p)}" ${drafts.page === p ? "selected" : ""}>${esc(p)}</option>`).join("")}
+          </select>
+          <select id="dpillar"><option value="">all pillars</option>
+            ${drafts.pillars.map((p) => `<option value="${esc(p)}" ${drafts.pillar === p ? "selected" : ""}>${esc(p)}</option>`).join("")}
+          </select>
+          <button class="btn ghost" id="drefresh">Refresh</button>
+        </div>
+      </div>
+      <p class="hint">Flags: <span class="tag warn">range</span>/<span class="tag warn">dash</span>/<span class="tag warn">word-DNA</span> = validator caught it · <span class="tag on">clean</span> = passed · <span class="tag">revised</span> = auto-revise ran. Click a row for the full caption + evidence.</p>
+      ${
+    table(
+      ["Created", "Page", "Pillar", "Angle", "Chars", "Flags"],
+      rows.map(rowHtml).join(""),
+      "No drafts. Once the M3 consumer is live (RAZ-50), SourceEnriched events land here.",
+    )
+  }
+    </div>`;
+
+  $("#dstatus").addEventListener("change", (e) => { drafts.status = e.target.value; drafts.expanded = null; renderDrafts(true); });
+  $("#dpage").addEventListener("change", (e) => { drafts.page = e.target.value; drafts.expanded = null; renderDrafts(true); });
+  $("#dpillar").addEventListener("change", (e) => { drafts.pillar = e.target.value; drafts.expanded = null; renderDrafts(true); });
+  $("#drefresh").addEventListener("click", () => renderDrafts());
+  document.querySelectorAll(".draftrow").forEach((el) =>
+    el.addEventListener("click", () => {
+      const id = Number(el.dataset.id);
+      drafts.expanded = drafts.expanded === id ? null : id;
+      renderDrafts(true);
+    })
+  );
+}
+
+function draftBody(r) {
+  const d = r.draft || {};
+  const ev = (r.evidence || []).map((e) =>
+    `<li>${esc((e.claim || "").slice(0, 160))}${e.url ? ` — <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.source || "link")}</a>` : ""}</li>`).join("");
+  const media = (r.media_refs || []).filter((m) => m.url)
+    .map((m) => `<img src="${esc(m.url)}" alt="" style="width:70px;height:40px;object-fit:cover;border-radius:3px;margin-right:6px">`).join("");
+  return `<div style="padding:10px 6px;max-width:820px">
+    ${d.title ? `<div style="font-weight:600;margin-bottom:6px">${esc(d.title)}</div>` : ""}
+    <div style="white-space:pre-wrap;line-height:1.7">${esc(d.copy || "")}</div>
+    ${(d.hashtags && d.hashtags.length) ? `<div class="hint mono" style="margin-top:8px">${esc(d.hashtags.join(" "))}</div>` : ""}
+    ${r.image_prompt ? `<p class="hint" style="margin-top:8px"><strong>image prompt:</strong> ${esc(r.image_prompt)}</p>` : ""}
+    ${media ? `<div style="margin-top:8px">${media}</div>` : ""}
+    ${ev ? `<div class="hint" style="margin-top:8px"><strong>evidence</strong><ul style="margin:4px 0 0 16px">${ev}</ul></div>` : ""}
+    <p class="hint mono" style="margin-top:8px">correlation_id: ${esc(r.correlation_id || "—")}</p>
+  </div>`;
+}
+
+/* ---------------- activity screen (M0 run_log — RAZ-58) ----------------
+ * The producer/inbound audit surface: one row per function invocation (source,
+ * caller IP, status, duration) — paired with the Infrastructure ledger (outbound
+ * calls). Read-only. Source filter + date range; click a row to see the API calls
+ * made during that run's time window (run_log has no FK into api_request_log, so
+ * the drill-down is a time-window join — honest, and enough to trace a run).
+ */
+
+const act = { source: "", from: "", to: "", seq: 0, rows: [], sources: [], expanded: null, drill: null };
+const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+
+function actBadge(st) {
+  const m = {
+    ok: ["on", "✓ ok"], skip: ["", "skip"], error: ["warn", "✕ error"],
+    crashed: ["warn", "✕ crash"], started: ["", "…running"],
+  };
+  const [cls, txt] = m[st] || ["", st];
+  return `<span class="tag ${cls}">${txt}</span>`;
+}
+
+async function renderActivity(reuseSources) {
+  const seq = ++act.seq;
+  const stale = () => seq !== act.seq || state.screen !== "activity";
+  if (!act.from) act.from = daysAgo(7);
+  if (!act.to) act.to = daysAgo(0);
+
+  let rows = [];
+  try {
+    if (!reuseSources || !act.sources.length) {
+      const s = await db("/run_log?select=source&order=source.asc&limit=1000").catch(() => []);
+      act.sources = [...new Set((s || []).map((r) => r.source))];
+    }
+    let q = `/run_log?select=*&order=started_at.desc&limit=300`;
+    q += `&started_at=gte.${act.from}T00:00:00&started_at=lte.${act.to}T23:59:59`;
+    if (act.source) q += `&source=eq.${encodeURIComponent(act.source)}`;
+    rows = await db(q);
+  } catch (e) {
+    if (stale()) return;
+    return ($("#screen").innerHTML = `<h1>Activity</h1>
+      <div class="card"><h2>run_log missing</h2>
+      <p class="hint">Run <span class="mono">supabase/database/20260720_raz58_run_log.sql</span> (RAZ-58) — until then nothing is logged here.</p>
+      <p class="hint mono">${esc(e.message).slice(0, 200)}</p></div>`);
+  }
+  if (stale()) return;
+  act.rows = rows;
+
+  const rowHtml = (r) =>
+    `<tr class="actrow" data-id="${r.id}" style="cursor:pointer">
+      <td class="mono">${esc(fmtTs(r.started_at, 5, 19))}</td>
+      <td class="mono">${esc(r.source)}</td>
+      <td class="mono">${esc(r.action ?? "—")}</td>
+      <td>${actBadge(r.status)}</td>
+      <td class="mono">${esc(r.caller_ip ?? "—")}</td>
+      <td class="mono">${r.duration_ms ?? "—"}</td>
+      <td class="mono" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.note ?? "")}</td>
+    </tr>` + (act.expanded === r.id ? `<tr><td colspan="7" style="background:var(--panel-2)">${drillHtml(r)}</td></tr>` : "");
+
+  $("#screen").innerHTML = `<h1>Activity</h1>
+    <p class="sub">M0 <span class="mono">run_log</span> — every invocation: what ran, from which caller IP, did it finish (RAZ-58, invariant #8).</p>
+    <div class="card">
+      <div class="spread"><h2>Runs <span class="count">${rows.length}</span></h2>
+        <div class="row">
+          <select id="acsrc"><option value="">all sources</option>
+            ${act.sources.map((s) => `<option value="${esc(s)}" ${act.source === s ? "selected" : ""}>${esc(s)}</option>`).join("")}
+          </select>
+          <label class="check">from&nbsp;<input type="date" id="acfrom" value="${act.from}"></label>
+          <label class="check">to&nbsp;<input type="date" id="acto" value="${act.to}"></label>
+          <button class="btn ghost" id="acrefresh">Refresh</button>
+        </div>
+      </div>
+      <p class="hint">Click a row to see the API calls made during that run's window. <span class="tag on">✓ ok</span> success · <span class="tag">skip</span> ran, no work · <span class="tag warn">✕</span> error / crash · <span class="tag">…running</span> not yet closed.</p>
+      ${
+    table(
+      ["When (UTC)", "Source", "Action", "Status", "Caller IP", "ms", "Note"],
+      rows.map(rowHtml).join(""),
+      "No runs in this window.",
+    )
+  }
+    </div>`;
+
+  $("#acsrc").addEventListener("change", (e) => { act.source = e.target.value; act.expanded = null; renderActivity(true); });
+  $("#acfrom").addEventListener("change", (e) => { act.from = e.target.value; act.expanded = null; renderActivity(true); });
+  $("#acto").addEventListener("change", (e) => { act.to = e.target.value; act.expanded = null; renderActivity(true); });
+  $("#acrefresh").addEventListener("click", () => renderActivity());
+  document.querySelectorAll(".actrow").forEach((el) =>
+    el.addEventListener("click", async () => {
+      const id = Number(el.dataset.id);
+      if (act.expanded === id) { act.expanded = null; act.drill = null; return renderActivity(true); }
+      act.expanded = id; act.drill = null;
+      renderActivity(true);
+      await loadDrill(id);
+    })
+  );
+}
+
+function drillHtml(r) {
+  if (!act.drill || act.drill.id !== r.id) {
+    return `<div class="hint" style="padding:8px">loading API calls in this run's window…</div>`;
+  }
+  const calls = act.drill.calls || [], dl = act.drill.dead || [];
+  return `<div style="padding:8px 4px">
+    <div class="hint" style="margin-bottom:6px">API calls during ${esc(fmtTs(r.started_at, 5, 19))} → ${esc(fmtTs(r.finished_at, 5, 19) || "…")}</div>
+    ${
+    table(
+      ["When", "Provider", "OK", "Status", "Recs", "ms", "URL / deny reason"],
+      calls.map((c) => `<tr>
+          <td class="mono">${esc(fmtTs(c.requested_at, 11, 19))}</td>
+          <td class="mono">${esc(c.provider)}</td>
+          <td><span class="tag ${c.allowed ? "on" : "warn"}">${c.allowed ? "✓" : "DENIED"}</span></td>
+          <td class="mono">${c.status ?? "—"}</td>
+          <td class="mono">${c.records ?? c.estimated_records ?? "—"}</td>
+          <td class="mono">${c.duration_ms ?? "—"}</td>
+          <td class="mono" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.deny_reason || c.url || "")}</td>
+        </tr>`).join(""),
+      "No API calls in this window.",
+    )
+  }
+    ${
+    dl.length
+      ? `<div class="hint" style="margin:10px 0 4px">Dead-letter in window</div>` + table(
+        ["When", "Stream", "Subscriber", "Error"],
+        dl.map((d) => `<tr><td class="mono">${esc(fmtTs(d.failed_at, 11, 19))}</td><td class="mono">${esc(d.stream)}</td><td class="mono">${esc(d.subscriber)}</td><td class="mono">${esc((d.error || "").slice(0, 120))}</td></tr>`).join(""),
+      )
+      : ""
+  }
+  </div>`;
+}
+
+async function loadDrill(id) {
+  const r = act.rows.find((x) => x.id === id);
+  if (!r) return;
+  const from = r.started_at, to = r.finished_at || new Date().toISOString();
+  try {
+    const [calls, dead] = await Promise.all([
+      db(`/api_request_log?select=*&requested_at=gte.${encodeURIComponent(from)}&requested_at=lte.${encodeURIComponent(to)}&order=requested_at.asc&limit=100`).catch(() => []),
+      db(`/dead_letter?select=*&failed_at=gte.${encodeURIComponent(from)}&failed_at=lte.${encodeURIComponent(to)}&order=failed_at.asc&limit=50`).catch(() => []),
+    ]);
+    act.drill = { id, calls: calls || [], dead: dead || [] };
+    if (state.screen === "activity" && act.expanded === id) renderActivity(true);
+  } catch { /* drill is best-effort — a failed drill must not break the table */ }
+}
+
 /* ---------------- source screen (RAZ-40 · manual search + review · RAZ-37) ----------------
  * TWO PANELS, because the two halves genuinely run on different clocks:
  *   Panel A "Search"  — sync sources (TMDB + the 5 AI-search scrapers, 19-78s) answer inline.
@@ -640,7 +890,7 @@ function renderSource() {
     <p class="sub">M2 · manual keyword search (RAZ-37). Results are ISOLATED — nothing reaches the event stream until you Promote.</p>
 
     <div class="card">
-      <h2>Search <span class="tag">panel A</span></h2>
+      <h2>Search</h2>
       <p class="hint">Free + AI sources answer inline (~19–78s). Bright Data keyword discovery is a <em>discover</em> job — it runs async via n8n and lands in the queue below minutes later, never inline.</p>
       <div class="row" style="margin-bottom:10px">
         <input id="skw" placeholder="keyword…" value="${esc(src.keyword)}" style="min-width:280px">
@@ -669,7 +919,7 @@ function renderSource() {
 
     <div class="card">
       <div class="spread">
-        <h2>Review queue <span class="tag">panel B</span> <span class="tag ${q.length ? "on" : ""}">${q.length} new</span></h2>
+        <h2>Review queue <span class="count ${q.length ? "live" : ""}">${q.length} new</span></h2>
         <div class="row">
           <span class="hint">promote to page</span>
           <select id="spage">
@@ -691,7 +941,7 @@ function renderSource() {
           const eng = e ? Object.entries(e).filter(([, v]) => v !== null && v !== undefined).map(([k, v]) => `${k[0]}:${v}`).join(" ") : "—";
           return `<tr>
             <td><input type="checkbox" class="qpick" value="${r.id}" ${src.chosen.has(r.id) ? "checked" : ""}></td>
-            <td>${p.image_url ? `<img src="${esc(p.image_url)}" alt="" style="width:46px;height:26px;object-fit:cover;border-radius:3px;vertical-align:middle;margin-right:8px">` : ""}${esc(String(p.title || "").slice(0, 78))}</td>
+            <td><div class="qcell">${p.image_url ? `<img class="thumb" src="${esc(p.image_url)}" alt="">` : ""}<span class="qtitle">${esc(String(p.title || "").slice(0, 78))}</span></div></td>
             <td class="mono">${esc(r.source)}${p.kind ? ` <span class="tag">${esc(p.kind)}</span>` : ""}</td>
             <td class="mono">${esc(eng)}</td>
             <td class="mono">${esc(fmtTs(r.searched_at, 5, 16))}</td>
@@ -885,6 +1135,8 @@ function render() {
   document.querySelectorAll(".navitem").forEach((b) => b.classList.toggle("active", b.dataset.screen === state.screen));
   if (state.screen === "trend") renderTrend();
   else if (state.screen === "infra") renderInfra();
+  else if (state.screen === "activity") renderActivity();
+  else if (state.screen === "drafts") renderDrafts();
   else {
     // Source data is loaded lazily — the trend screen is the default and must not pay
     // for a catalog fetch + two queries it never uses. Guard both outcomes on the

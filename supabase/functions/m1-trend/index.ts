@@ -11,6 +11,7 @@ import { pullRss } from "./adapters/rss.ts";
 import { pullApi } from "./adapters/api.ts";
 import { pullScrape } from "./adapters/scraper.ts";
 import type { PullJob } from "./service/types.ts";
+import { withRun } from "../m0-infrastructure/observability/runlog.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -63,16 +64,21 @@ async function run() {
   };
 }
 
-Deno.serve(async (_req) => {
-  try {
-    const result = await run();
-    return new Response(JSON.stringify(result, null, 2), {
-      status: result.ok ? 200 : 207,
-      headers: { "Content-Type": "application/json" },
-    });
-  } catch (e) {
-    return new Response(JSON.stringify({ ok: false, error: (e as Error).message }), {
-      status: 500, headers: { "Content-Type": "application/json" },
-    });
-  }
-});
+Deno.serve((req) =>
+  withRun("m1-trend", req, async (rl) => {
+    try {
+      const result = await run();
+      rl.action = "run";
+      rl.summary = result;
+      rl.status = result.ok ? "ok" : "error";
+      return new Response(JSON.stringify(result, null, 2), {
+        status: result.ok ? 200 : 207,
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (e) {
+      return new Response(JSON.stringify({ ok: false, error: (e as Error).message }), {
+        status: 500, headers: { "Content-Type": "application/json" },
+      });
+    }
+  })
+);
