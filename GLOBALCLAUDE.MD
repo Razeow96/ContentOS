@@ -28,7 +28,7 @@ Solo Founder and **system architect** of Content OS. Understands DDD, event-driv
 
 ### Build philosophy
 - **Lean and fast, but proven.** Build fast — and a feature is accepted ONLY after its main path ran once for real with the result observed. That single proven run is what Done requires; never accept on "the logic is sound". No edge-case hunting beyond it; debug/maintain only when a real problem surfaces.
-- Don't over-engineer. Smallest correct change. No speculative folders, abstractions, or features not asked for.
+- Don't over-engineer. Smallest correct change. No speculative folders, abstractions,features or improvements not asked for.
 - if there is no action needed to be taken, no explanation needed.
 
 ## Goal OKR ( Updated 20/7/2026 )

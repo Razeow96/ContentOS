@@ -12,6 +12,14 @@ keep the document lean without any expired info
 
 note : treat linear as software documentation and project management including stakeholder communication
 
+## Linear before code (spec-of-record)
+- Every feature or change we discuss and agree gets its Linear issue written/updated FIRST — scope, key decisions, acceptance criteria — BEFORE any code. Linear is the spec-of-record; code follows the ticket, never the reverse.
+- This is an order rule, not an approval gate — it does not reinstate the contract-approval wait for additive event changes (CLAUDE.md invariant #7). Capture the decision in Linear, then build.
+
+## Go-live is the owner's, not Claude's
+- MARK IT DONE is about the Linear board only. Activation · publishing · cutover · migration · commits are Raze's decisions on Raze's timeline — NEVER performed autonomously, NOT "remaining work", NOT blockers.
+- State a go-live prerequisite once, in its issue. Then drop it unless Raze asks. "Done" (built + verified) and "live" (Raze flipped it on) are different states; a feature is Done without being live.
+
 ## Hard boundaries
 - Never put secrets in files/code (they get committed). Use n8n credentials or Supabase secrets; reference by name.
 - Never touch the live legacy workflows (A/B/C) except an explicit, logged patch.

@@ -2,10 +2,14 @@
 
 These are binding rules for how Content OS is built. They come from ADR-001 (Linear). If a request conflicts with these, follow the rule and say so.
 
-## Start of EVERY session — read these first
-Before answering anything or touching code, read **both**:
-1. **`learnrules.md`** — working rules: SESSION.md discipline, Linear/tracking discipline, hard boundaries.
-2. **`SESSION.md`** — current state of the build: what's live, what's open, what's pending on the owner.
+## Start of EVERY session — read in this order
+On a NEW session, before answering or touching code, read:
+1. **`GLOBALCLAUDE.MD`** (also installed as the global `~/.claude/CLAUDE.md`) — who Raze is, comms style, build philosophy, OKR.
+2. **`CLAUDE.md`** (this file) — architecture invariants.
+3. **`learnrules.md`** — working rules: SESSION.md discipline, Linear/tracking discipline, hard boundaries.
+4. **`SESSION.md`** — current state of the build: what's live, what's open, what's pending on the owner.
+
+Then, when work touches a domain, briefly read that domain's pointer `supabase/functions/<domain>/CLAUDE.md`.
 
 Treat SESSION.md as a snapshot that may be stale — it is only rewritten when asked, so it can lag the real state by days. **Verify before relying on it**: check Linear for the live board, and check the live DB/deployment when a claim is load-bearing (e.g. "migration X is applied"). Say so when it's out of date rather than building on a stale premise.
 
@@ -22,7 +26,7 @@ Trend Intelligence · Content Sources · Content Generation · Media Production 
 4. **Fat, self-contained events.** The event payload carries everything a subscriber needs, so subscribers never call back into the source domain.
 5. **Idempotent consumers.** Every subscriber dedups on `event_id` (a "seen log"), because delivery is at-least-once.
 6. **Correlation & causation.** `correlation_id` is minted at the head of a flow and copied to every downstream event; `causation_id` = the event that caused this one. This is how a flow is traced across domains.
-7. **Contract-first.** Every event type has a versioned contract (Linear doc) approved BEFORE its code is built. Additive change = bump schema_version; breaking change = new event_type (e.g. TrendDetectedV2).
+7. **Contract-first (new event types only).** A NEW event_type has a versioned contract (Linear issue/doc) approved BEFORE its code is built. An ADDITIVE change (new optional field) does NOT block on approval — bump schema_version and record the change on the contract issue in the same pass as the code. Breaking change = a new event_type (e.g. TrendDetectedV2).
 8. **Every execution path logs — mandatory, current AND future.** Every feature — edge function, n8n workflow, consumer — MUST emit an invocation record to the M0 observability log (`run_log`, via the `withRun` helper / the gate `log` endpoint): source, caller IP, action, status, `correlation_id`, outcome. No silent execution paths. This is a **security control, not just debugging**: the run log + the rate-limit gate/ledger (`api_request_log`) are the only two surfaces we monitor and audit for what ran, from where, and what it spent. A feature that runs without logging is NOT Done. (Tracked: RAZ observability issue.)
 
 ## Logic placement
