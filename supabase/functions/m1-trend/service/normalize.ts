@@ -49,7 +49,10 @@ export function normalize(job: PullJob, items: unknown[]): RawTrend[] {
   return out;
 }
 
-export function fanOut(job: PullJob, trends: RawTrend[]): TrendDetected[] {
+// trendSignalId is minted ONCE per campaign run (in run()) and stamped on every
+// event of the run — so all trends from one campaign share one trend_signal_id,
+// while each trend×page keeps its own per-flow correlation_id (RAZ-72).
+export function fanOut(job: PullJob, trends: RawTrend[], trendSignalId: string): TrendDetected[] {
   const events: TrendDetected[] = [];
   for (const t of trends) {
     for (const sub of job.subscribers) {
@@ -59,6 +62,7 @@ export function fanOut(job: PullJob, trends: RawTrend[]): TrendDetected[] {
         campaign: sub.campaign ?? null,
         event_type: "TrendDetected",
         correlation_id: crypto.randomUUID(),
+        trend_signal_id: trendSignalId,
       });
     }
   }

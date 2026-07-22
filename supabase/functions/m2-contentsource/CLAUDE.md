@@ -8,4 +8,8 @@
   (field_map verification, external_id, collect-vs-discover).
 
 ## Learned rules
-(appended only after a mistake's fix is proven and Raze approves — see root CLAUDE.md)
+- Trend keyword `search` mode resolves to TMDB (title/date/poster) — thin; M3
+  refuses to draft from it. Rich material comes from the article-feed path
+  (`mode=run`, `page_article_sources`), which is UNTARGETED (today's feed, not
+  filtered by the trend keyword). No trend-keyword-joined rich pull exists yet —
+  that is RAZ-61. (2026-07-21, proven: TMDB refused 3/4, feeds drafted)

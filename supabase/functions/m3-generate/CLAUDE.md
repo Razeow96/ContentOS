@@ -14,4 +14,12 @@
   m3_config, never in code. Contract: ContentGenerated v1 (Linear).
 
 ## Learned rules
-(appended only after a mistake's fix is proven and Raze approves — see root CLAUDE.md)
+- Dedup reads `content_items` (14-day burned set); if drafts aren't persisted the
+  memory is empty and dedup goes blind → same movie repeats. Persistence is
+  load-bearing. (2026-07-21, proven: 1 pre-today row → 奧德賽 recurred)
+- `payload.page` MUST equal an existing `page_identity.page_id` or generation
+  skips "no identity". Trend route sent `jello_topmovie_svs` vs identity `jello`.
+  Verify page-id parity upstream. (2026-07-21)
+- `DraftJson` emits `entity`+`movie_year` but NOT director/movie_star — those are
+  derived from evidence, marked — when the source doesn't name them (hard rule 6).
+  (2026-07-21)

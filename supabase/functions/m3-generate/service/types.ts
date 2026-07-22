@@ -21,6 +21,7 @@ export interface SourceEventRecord {
     entities?: Record<string, unknown> | null;
     enrichment?: Record<string, unknown> | null;
     ref_kind?: string;
+    trend_signal_id?: string | null;   // RAZ-72: the originating trend (null off the trend path)
   };
   occurred_at: string;
 }

@@ -177,4 +177,7 @@ export interface SourceEnriched extends RawMaterial {
   event_type: "SourceEnriched";
   correlation_id: string;
   causation_id: string | null;
+  // schema_version 2 (RAZ-72): the originating trend's signal id, threaded from the
+  // trend consumer. Absent/null on non-trend paths (run/ingest/promote).
+  trend_signal_id?: string | null;
 }

@@ -69,6 +69,11 @@ interface RunBody {
   // RAZ-43: echoed back by the worker from the harvest_plan job — inspiration class
   // stamped onto the emitted material. (trigger echoes too; consumed by ingestJob.)
   ref_kind?: string;
+  // RAZ-66: trend_events DB webhook delivery shape. When present, this request is the
+  // M2 trend consumer (dedup src_processed → search), not a mode-based call.
+  type?: string;
+  table?: string;
+  record?: { event_id: string; payload?: { topic?: string; page?: string; correlation_id?: string; trend_signal_id?: string } };
 }
 
 interface Summary {
@@ -201,6 +206,9 @@ async function runSearch(body: RunBody, sum: Summary) {
     const fresh = await filterFresh(raw, SUPABASE_URL, SERVICE_KEY);
     sum.fresh = fresh.length;
     const trig = jobs[0]?.trigger ?? null;
+    // RAZ-72: the trend consumer passes trend_signal_id on body.trend — stamp it onto
+    // every emitted source event (null on a non-trend search).
+    const trendSignalId = (body.trend?.trend_signal_id as string | undefined) ?? null;
     const pages = body.pages ?? [];
     const events = fresh.flatMap((m) =>
       pages.map((p) => ({
@@ -209,6 +217,7 @@ async function runSearch(body: RunBody, sum: Summary) {
         event_type: "SourceEnriched" as const,
         correlation_id: trig?.correlation_id ?? crypto.randomUUID(),
         causation_id: trig?.causation_id ?? null,
+        trend_signal_id: trendSignalId,
       })),
     );
     sum.written = await writeSourceEvents(events, SUPABASE_URL, SERVICE_KEY);
@@ -460,10 +469,122 @@ const JSON_HEADERS = { ...CORS, "Content-Type": "application/json" };
 // Collapsing both into 500 made "promote without pages" look like a server crash.
 class BadRequest extends Error {}
 
+const resp = (body: unknown, status: number) =>
+  new Response(JSON.stringify(body, null, 2), { status, headers: JSON_HEADERS });
+
+// ── In-domain subscribers (RAZ-66/68). These fold what were separate n8n workflows
+// (and my earlier stray m2-trend-consumer/m2-harvest-ingest functions) into the M2
+// domain fn, per the one-domain-one-function rule.
+
+const INGEST_SECRET = Deno.env.get("HARVEST_INGEST_SECRET") ?? "";
+
+// Atomic idempotency guard on a seen-log — one INSERT ... ON CONFLICT DO NOTHING.
+async function claimFirstDelivery(seenTable: string, eventId: string): Promise<boolean> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${seenTable}`, {
+    method: "POST",
+    headers: {
+      apikey: SERVICE_KEY,
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation,resolution=ignore-duplicates",
+    },
+    body: JSON.stringify({ event_id: eventId }),
+  });
+  if (!res.ok) throw new Error(`${seenTable} insert ${res.status}: ${(await res.text()).slice(0, 160)}`);
+  const rows = await res.json();
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+// BD delivers gzip by default; we ask uncompressed, but decode defensively.
+async function readRawText(req: Request): Promise<string> {
+  const buf = new Uint8Array(await req.arrayBuffer());
+  if (buf.length === 0) return "";
+  if (buf[0] === 0x1f && buf[1] === 0x8b) {
+    const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return await new Response(stream).text();
+  }
+  return new TextDecoder().decode(buf);
+}
+
+// RAZ-68 · Bright Data push-delivery receiver (ingest=harvest route). Auth = the
+// shared secret `k` (BD passes the gateway with the anon key in auth_header). The job
+// echo is in the query; BD's POST body is the scraped data.
+async function harvestIngest(req: Request, u: URL, rl: { action?: string; status?: string; correlation_id?: string | null; summary?: unknown }) {
+  const sp = u.searchParams;
+  if (!INGEST_SECRET || sp.get("k") !== INGEST_SECRET) {
+    rl.action = "harvest_ingest_unauthorized";
+    rl.status = "error";
+    return resp({ ok: false, error: "unauthorized" }, 401);
+  }
+  const text = await readRawText(req);
+  let items: unknown[] = [];
+  if (text.trim()) {
+    const parsed = JSON.parse(text);
+    items = Array.isArray(parsed) ? parsed
+      : Array.isArray((parsed as { data?: unknown[] }).data) ? (parsed as { data: unknown[] }).data
+      : [parsed];
+  }
+  const correlation_id = sp.get("correlation_id");
+  const body: RunBody = {
+    mode: "ingest",
+    source: sp.get("source") ?? undefined,
+    pages: sp.get("page_id") ? [sp.get("page_id") as string] : [],
+    strategy: sp.get("strategy") ?? undefined,
+    window_days: sp.get("window_days") ? Number(sp.get("window_days")) : undefined,
+    cap: sp.get("cap") ? Number(sp.get("cap")) : undefined,
+    ref_kind: sp.get("ref_kind") ?? undefined,
+    trigger: correlation_id ? { correlation_id, causation_id: sp.get("causation_id") || null } : null,
+    items,
+  };
+  const result = await run(body);
+  rl.action = "harvest_ingest";
+  rl.correlation_id = correlation_id;
+  rl.summary = { source: body.source, items: items.length, written: (result as { written?: number }).written };
+  rl.status = (result as { ok?: boolean }).ok ? "ok" : "error";
+  return resp({ ok: true, source: body.source, items: items.length, ingest: result }, 200);
+}
+
+// RAZ-66 · M2 trend consumer (trend_events DB webhook). Dedup on src_processed →
+// keyword search (sink=events), carrying the trend's correlation + causation lineage.
+async function trendConsume(body: RunBody, rl: { action?: string; status?: string; correlation_id?: string | null; summary?: unknown }) {
+  const rec = body.record!;
+  const p = rec.payload ?? {};
+  if (!p.topic || !p.page) {
+    rl.action = "skip";
+    rl.status = "skip";
+    return resp({ ok: true, event_id: rec.event_id, outcome: "skip", reason: "event missing payload.topic/page" }, 200);
+  }
+  const first = await claimFirstDelivery("src_processed", rec.event_id);
+  if (!first) {
+    rl.action = "duplicate_skipped";
+    rl.status = "skip";
+    rl.correlation_id = p.correlation_id ?? null;
+    return resp({ ok: true, event_id: rec.event_id, outcome: "duplicate_skipped" }, 200);
+  }
+  const searchBody: RunBody = {
+    mode: "search",
+    keyword: p.topic,
+    sink: "events",
+    pages: [p.page],
+    // RAZ-72: thread the trend's signal id onto the compiled source events so a
+    // draft traces back to the campaign that produced it.
+    trend: { correlation_id: p.correlation_id, event_id: rec.event_id, trend_signal_id: p.trend_signal_id },
+  };
+  const result = await run(searchBody);
+  rl.action = "trend_consume";
+  rl.correlation_id = p.correlation_id ?? null;
+  rl.summary = result;
+  rl.status = (result as { ok?: boolean }).ok ? "ok" : "error";
+  return resp({ ok: true, event_id: rec.event_id, outcome: "enriched", enrich: result }, 200);
+}
+
 Deno.serve((req) => {
   // OPTIONS preflight is not a run — keep it out of the log entirely.
   if (req.method === "OPTIONS") return Promise.resolve(new Response(null, { status: 204, headers: CORS }));
   return withRun("m2-contentsource", req, async (rl) => {
+    // RAZ-68: Bright Data push-delivery of a harvest snapshot (raw data body).
+    const u = new URL(req.url);
+    if (u.searchParams.get("ingest") === "harvest") return await harvestIngest(req, u, rl);
     try {
       // A body that fails to parse must NOT fall through to mode="run": that default
       // pulls every subscribed API source and writes real events, so a malformed
@@ -476,16 +597,13 @@ Deno.serve((req) => {
           try {
             body = JSON.parse(text);
           } catch (e) {
-            return new Response(
-              JSON.stringify({
-                ok: false,
-                error: `Body is not valid JSON: ${(e as Error).message}`,
-                bytes_received: text.length,
-              }),
-              { status: 400, headers: JSON_HEADERS },
-            );
+            return resp({ ok: false, error: `Body is not valid JSON: ${(e as Error).message}`, bytes_received: text.length }, 400);
           }
         }
+      }
+      // RAZ-66: trend_events DB webhook → the M2 trend consumer.
+      if (body.type === "INSERT" && body.table === "trend_events" && body.record?.event_id) {
+        return await trendConsume(body, rl);
       }
       const result = await run(body);
       rl.action = body.mode ?? "run";

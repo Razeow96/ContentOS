@@ -35,6 +35,11 @@ Trend Intelligence · Content Sources · Content Generation · Media Production 
 - **Config is data, not code.** Platform/catalog config lives in JSON files (edited in VS Code) or SQL tables — never hardcoded in logic. The code READS config; it doesn't CONTAIN it.
 - **UI renders what the backend serves; it never re-implements backend logic.** No copied predicates, enums, or column lists in the frontend — a UI-side re-derivation (a guessed `bd_input` value) silently hid 4 platforms. If the backend classifies it, the UI reads that classification or reuses the exact same rule.
 
+## Drawing flow diagrams
+Before drawing, mapping, or editing ANY Content OS flow diagram (data / event / DDD),
+read **`docs/diagramflows/drawingrules.md`** first and follow it. Canonical diagrams
+live in Eraser (DSL, two-way with the owner); the repo doc is the law they obey.
+
 ## Aggregate vs reactor
 Not every domain owns state. An **aggregate** owns tables + enforces invariants (e.g. Trend owns dedup/freshness). A **reactor** is stateless: event-in → transform → event-out (e.g. Media Production). Decide which before building; getting it wrong creates a distributed monolith.
 

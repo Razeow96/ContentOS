@@ -65,6 +65,7 @@ export async function writeContentItem(
       angle_hook: x.draft.hook ?? null,
       source_event_id: x.event.event_id,
       correlation_id: x.event.correlation_id,
+      trend_signal_id: x.event.payload.trend_signal_id ?? null,  // RAZ-72: trace back to the trend
       validation: x.validation,
     }),
   });
@@ -96,6 +97,7 @@ export async function writeContentEvent(
     image_prompt: x.draft.image_prompt ?? null,
     angle: { entity: x.draft.entity, pillar_id: x.pillar.pillar_id, hook: x.draft.hook ?? null },
     source_event_id: x.event.event_id,
+    trend_signal_id: x.event.payload.trend_signal_id ?? null,   // RAZ-72: lineage to the trend
     lang: x.lang,
     region: x.region,
   };
@@ -104,7 +106,7 @@ export async function writeContentEvent(
     headers: headers(key, "minimal"),
     body: JSON.stringify({
       event_type: "ContentGenerated",
-      schema_version: 1,
+      schema_version: 2,   // v2 (RAZ-72): payload adds `trend_signal_id` (additive; null off the trend path)
       aggregate_id: String(x.itemId),
       correlation_id: x.event.correlation_id,     // lineage from the source event
       causation_id: x.event.event_id,             // caused by the SourceEnriched

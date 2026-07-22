@@ -27,6 +27,11 @@ async function runJob(job: PullJob) {
 async function run() {
   const summary = { pulled: 0, fresh: 0, written: 0, jobs: 0, platforms: new Set<string>(), errors: [] as string[] };
 
+  // RAZ-72: ONE trend_signal_id per campaign run — the head of the ID spine.
+  // Every trend detected in this run carries it; downstream (M2, M3) copies it so
+  // a draft traces back to the campaign that produced it.
+  const trendSignalId = crypto.randomUUID();
+
   const [sources, subs] = await Promise.all([
     loadSources(),
     loadSubscriptions(SUPABASE_URL, SERVICE_KEY),
@@ -44,7 +49,7 @@ async function run() {
       const fresh = await filterFresh(raw, SUPABASE_URL, SERVICE_KEY);
       summary.fresh += fresh.length;
 
-      const events = fanOut(job, fresh);
+      const events = fanOut(job, fresh, trendSignalId);
       const n = await writeTrendEvents(events, SUPABASE_URL, SERVICE_KEY);
       summary.written += n;
     } catch (e) {
@@ -54,6 +59,7 @@ async function run() {
 
   return {
     ok: summary.errors.length === 0,
+    trend_signal_id: trendSignalId,
     jobs: summary.jobs,
     platforms: [...summary.platforms],
     trends_pulled: summary.pulled,

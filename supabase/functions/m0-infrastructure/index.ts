@@ -15,9 +15,15 @@
 import { acquire, report } from "./rate-limit/ratelimit.ts";
 import { providerOf } from "./rate-limit/config.ts";
 import { callerIp, logRun } from "./observability/runlog.ts";
+import { runSweep } from "./backbone/sweep.ts";
 
 interface Body {
-  action?: "acquire" | "report" | "log";
+  action?: "acquire" | "report" | "log" | "sweep";
+  // action:"sweep" (RAZ-70) — backbone safety sweep, scheduled by pg_cron/n8n.
+  dry_run?: boolean;
+  age_minutes?: number;
+  lookback_hours?: number;
+  max_per_stream?: number;
   provider?: string;
   method?: string;
   url?: string;
@@ -74,6 +80,20 @@ Deno.serve(async (req) => {
         duration_ms: body.duration_ms ?? null,
       });
       return json({ ok: true, log_id });
+    }
+
+    // action:"sweep" (RAZ-70) — backbone safety sweep. Logs one run_log row itself
+    // (invariant #8), same write-through pattern as action:"log".
+    if (body.action === "sweep") {
+      const result = await runSweep(body);
+      await logRun({
+        source: "m0-sweep",
+        action: result.dry_run ? "sweep_dry_run" : "sweep",
+        caller_ip: callerIp(req),
+        status: "ok",
+        summary: result,
+      });
+      return json({ ok: true, ...result });
     }
 
     // default: acquire

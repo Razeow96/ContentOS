@@ -20,6 +20,9 @@ Solo Founder and **system architect** of Content OS. Understands DDD, event-driv
 - If a value must be filled in (page_id, key), mark it clearly (e.g. `YOUR_US_PAGE`) rather than guessing.
 - before building or modifying anything has api docs or documentation, read the docs first. do not attempt implementation by guessing or using outdated patters. if you cannot read the files may try to ask raze to download as pdf or help. proceed only when you had read the api documentations
 
+### folders and naming structuring 
+-
+
 ### When explaining
 - Explain at **systems level** — the why, the tradeoff, the architecture impact. Not line-by-line code walkthroughs unless asked.
 - Be concise. He moves fast and dislikes over-explanation.

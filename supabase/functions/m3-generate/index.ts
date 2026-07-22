@@ -26,6 +26,25 @@ const json = (body: unknown, status = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 
+// RAZ-67: the source_events DB webhook posts here directly, so m3-generate IS the M3
+// consumer. Atomic idempotency on gen_processed — one INSERT ... ON CONFLICT DO
+// NOTHING; returns true only when THIS delivery claimed the event (first delivery).
+async function claimFirstDelivery(eventId: string): Promise<boolean> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/gen_processed`, {
+    method: "POST",
+    headers: {
+      apikey: SERVICE_KEY,
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation,resolution=ignore-duplicates",
+    },
+    body: JSON.stringify({ event_id: eventId }),
+  });
+  if (!res.ok) throw new Error(`gen_processed insert ${res.status}: ${(await res.text()).slice(0, 160)}`);
+  const rows = await res.json();
+  return Array.isArray(rows) && rows.length > 0;
+}
+
 async function handle(record: SourceEventRecord) {
   const p = record.payload ?? {};
   const page = String(p.page ?? "");
@@ -119,13 +138,26 @@ Deno.serve((req) =>
     try {
       const text = await req.text();
       if (!text.trim()) return json({ ok: false, error: "empty body — POST { record: <source_events row> }" }, 400);
-      let body: { record?: SourceEventRecord };
+      let body: { record?: SourceEventRecord; type?: string; table?: string };
       try {
         body = JSON.parse(text);
       } catch (e) {
         return json({ ok: false, error: `body is not valid JSON: ${(e as Error).message}` }, 400);
       }
       if (!body.record?.event_id) return json({ ok: false, error: "missing record.event_id" }, 400);
+
+      // Webhook delivery (body.type==="INSERT") → dedup on gen_processed first: this
+      // path IS the M3 consumer. Direct { record } calls (replay / n8n during overlap,
+      // which pre-guard) skip it and just generate — so both coexist safely.
+      if (body.type === "INSERT") {
+        const first = await claimFirstDelivery(body.record.event_id);
+        if (!first) {
+          rl.action = "duplicate_skipped";
+          rl.status = "skip";
+          rl.correlation_id = (body.record.payload as { correlation_id?: string } | undefined)?.correlation_id ?? null;
+          return json({ ok: true, event_id: body.record.event_id, outcome: "duplicate_skipped" });
+        }
+      }
 
       const result = await handle(body.record);
       rl.action = result.outcome;

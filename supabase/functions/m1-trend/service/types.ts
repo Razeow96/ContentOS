@@ -73,5 +73,6 @@ export interface TrendDetected extends Omit<RawTrend, never> {
   page: string;
   campaign: string | null;       // schema_version 2: the subscription's campaign label (null = ungrouped)
   event_type: "TrendDetected";
-  correlation_id: string;
+  correlation_id: string;         // per event (one per trend × page) — traces THIS flow
+  trend_signal_id: string;        // schema_version 3 (RAZ-72): ONE per campaign run — traces WHICH trend
 }

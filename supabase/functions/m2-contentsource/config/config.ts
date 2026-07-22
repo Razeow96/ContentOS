@@ -115,6 +115,17 @@ export function buildHarvestPlan(
     // just unbounded (caught 2026-07-16).
     if (r.cap && r.cap > 0) trigger_url += `&limit_per_input=${r.cap}`;
 
+    // RAZ-68: append BD push-delivery params (shadow until HARVEST_INGEST_SECRET is set).
+    trigger_url += deliverySuffix({
+      ingest_source: src.name,
+      page_id: r.page_id,
+      strategy: r.strategy,
+      window_days: r.window_days,
+      cap: r.cap,
+      ref_kind: r.ref_kind,
+      trigger: trig,
+    });
+
     // Merge the row's cap into the scraper's post-count input when it declares one.
     const extra: Record<string, unknown> = { ...(src.bd_params ?? {}) };
     if (r.cap && "num_of_posts" in extra) extra.num_of_posts = r.cap;
@@ -184,6 +195,48 @@ function triggerFrom(trend: Record<string, unknown> | null) {
     correlation_id: (trend.correlation_id as string) ?? crypto.randomUUID(),
     causation_id: (trend.event_id as string) ?? (trend.causation_id as string) ?? null,
   };
+}
+
+// RAZ-68: Bright Data push-delivery. When HARVEST_INGEST_SECRET is set, tell BD to
+// POST the finished snapshot straight to m2-harvest-ingest (no n8n poll/download, no
+// in-memory snapshot hold). BD's delivery POST is data-only, so the job echo the worker
+// used to attach on ingest rides as query params ON the endpoint URL — the URL IS the
+// context. Absent secret = no params appended, behaviour identical to before (fail-safe),
+// so this stays fully shadow until the secret is deployed.
+function deliverySuffix(job: {
+  ingest_source: string;
+  page_id?: string | null;
+  strategy?: string | null;
+  window_days?: number | null;
+  cap?: number | null;
+  ref_kind?: string | null;
+  trigger?: { correlation_id: string; causation_id: string | null } | null;
+}): string {
+  const secret = Deno.env.get("HARVEST_INGEST_SECRET");
+  const base = Deno.env.get("SUPABASE_URL");
+  const anon = Deno.env.get("SUPABASE_ANON_KEY");
+  if (!secret || !base || !anon) return "";
+  // Delivery target is the m2-contentsource domain fn (ingest=harvest route). BD's
+  // auth_header carries the public anon key so it passes verify_jwt at the gateway;
+  // the shared secret `k` (checked in-code) is the real guard. Job echo rides along
+  // so BD's data-only POST is self-describing.
+  const echo = new URLSearchParams();
+  echo.set("ingest", "harvest");
+  echo.set("k", secret);
+  echo.set("source", job.ingest_source);
+  if (job.page_id) echo.set("page_id", job.page_id);
+  if (job.strategy) echo.set("strategy", job.strategy);
+  if (job.window_days != null) echo.set("window_days", String(job.window_days));
+  if (job.cap != null) echo.set("cap", String(job.cap));
+  if (job.ref_kind) echo.set("ref_kind", job.ref_kind);
+  if (job.trigger) {
+    echo.set("correlation_id", job.trigger.correlation_id);
+    if (job.trigger.causation_id) echo.set("causation_id", job.trigger.causation_id);
+  }
+  const endpoint = `${base}/functions/v1/m2-contentsource?${echo.toString()}`;
+  return `&endpoint=${encodeURIComponent(endpoint)}` +
+    `&auth_header=${encodeURIComponent("Bearer " + anon)}` +
+    `&uncompressed_webhook=true`;
 }
 
 // Build one job per (source + param-set). ingest-type sources never run here —
