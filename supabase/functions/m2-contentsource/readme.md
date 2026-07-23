@@ -21,6 +21,21 @@ n8n (schedule / trend webhook / Bright Data snapshot / manual tool)
 - **`{ "mode": "promote", "ids": [...], "pages": [...] }`** — RAZ-37. The ONLY bridge out of `manual_search_results`: operator-chosen rows → SourceEnriched. Human-initiated: fresh correlation_id, causation null.
 - **`{ "mode": "harvest_plan", "scope": "due"|"daily"|"all"|"triggered", "ref_ids": [1,2], "pages": [...], "trend": {...} }`** — RAZ-36/RAZ-43. ⚠ scope `due` (alias `daily`) **claims and advances** due rows atomically via `ref_harvest_claim()` — NOT a dry run; each call consumes the due slots it returns. `all`/`ref_ids` are read-only; `triggered` is read-only and REQUIRES `pages`+`trend`. Unknown scope = 400. Returns `{ scope, jobs, skipped, refs_considered, advanced }`.
 
+## Trend-compiled pull (RAZ-73, 2026-07-23)
+
+The `trend_events` DB-webhook consumer (`trendConsume`) no longer runs a thin keyword `search` — it runs `runTrendCompile`: **one trend keyword → ONE compiled `SourceEnriched` v3** (`source: trend_compiled`, `material_type: compiled`, `tier: material`) carrying the full spine + `keywords` + two legs:
+
+- **manual** — free `search: true` catalog sources (`tmdb_search` today; a new non-BD search entry auto-joins).
+- **auto** — the page's OWN `page_article_sources` feeds/scrapes, **keyword-filtered** (CJK-safe substring, then all-tokens match), plus BD AI-search (sync prompt family) ONLY for pages naming sources in `page_source_settings.trend_bd_sources` (paid → opt-in, NULL = none).
+
+Each item is freshness-tagged from its source's `freshness` capability tag (`recent|trend|hot`, per catalog entry), deduped via `source_material` (cap-aware: claims stop at the leg cap so capped-out items aren't burned), trimmed (`summary_max`, per-item `raw` dropped — many items per event), and capped (`manual_cap`/`auto_cap`). Zero items = `no_material`, nothing emitted. Knobs live in `sources.json → trend_pull`.
+
+Guards proven live 2026-07-23:
+- **Only keyword-grade signals compile** (`trend_pull.keyword_signal_types`, i.e. `search_trend`). Title-grade topics (youtube `trending_rank` = raw video titles) skip cheaply — 50 of them once did 100+ feed fetches for zero material and exhausted the Yahoo + LTN daily record budgets.
+- **`feed_cache` table (TTL `feed_cache_ttl_min`)** — a campaign burst fires one consumer per trend; feeds are fetched once per window, reused across the burst. Trend path only; the daily run-mode pull stays direct.
+
+M3 side: `material_type: "compiled"` is enabled in `m3_config` generation.material_types; the compiled brief renders `sources_manual`/`sources_auto` with freshness as the pillar-priority signal, inspiration-tier items are context-only, and evidence/media_refs are built per item. First proven run: campaign `0e73843b` → 6 放映週報 articles → draft `content_items` 18 (獨奏者之舞).
+
 ## harvest_plan + the scheduler (RAZ-43, revised 2026-07-19)
 
 n8n **cannot read `sources.json`** (bundled here), so the function joins ref rows against the catalog and hands n8n **ready-to-execute jobs** (`trigger_url` formed, `inputs` built, `page_id`/`ref_kind`/`trigger` to echo back). n8n holds zero config, makes zero decisions.

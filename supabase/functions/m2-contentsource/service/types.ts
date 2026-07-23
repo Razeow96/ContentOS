@@ -20,6 +20,11 @@ export interface MaterialSource {
   auth_param?: string;               // query param name when auth_mode=query (default: "key")
   image_base?: string;               // prefix for relative image paths (e.g. TMDB poster_path)
   search?: boolean;                  // true = usable as a keyword-search source ({query} in url)
+  // RAZ-73: capability freshness tag — what this source's selection REPRESENTS
+  // (recent = newest published · trend = tied to the searched/trending keyword ·
+  // hot = engagement-ranked). Carried per-item on the compiled trend pull; M3 reads
+  // it as a pillar-priority signal. Data, never derived in code. Absent = "recent".
+  freshness?: "recent" | "trend" | "hot";
   // Bright Data (type="brightdata") only:
   dataset_id?: string;               // gd_... scraper id from the Bright Data dashboard
   platform?: string;                 // for bd_input="url": matches page_reference_sources.platform
@@ -171,6 +176,24 @@ export interface RawMaterial {
   raw: unknown;
 }
 
+// RAZ-73: one trimmed item inside the compiled trend event. The normalized fields
+// M3's prompt actually reads, WITHOUT the raw blob — a compiled event carries many
+// items and a fat raw per item would balloon the webhook payload (OOM lesson).
+export interface CompiledMaterial {
+  source: string;
+  material_type: string;
+  kind: string | null;
+  tier: Tier;                        // inspiration items ride along but are style/context-only for M3
+  freshness: "recent" | "trend" | "hot";
+  title: string;
+  summary: string | null;
+  url: string | null;
+  image_url: string | null;
+  published_at: string | null;
+  engagement: Record<string, unknown> | null;
+  external_id: string | null;
+}
+
 // The event payload written to source_events (one per matching page)
 export interface SourceEnriched extends RawMaterial {
   page: string;
@@ -180,4 +203,10 @@ export interface SourceEnriched extends RawMaterial {
   // schema_version 2 (RAZ-72): the originating trend's signal id, threaded from the
   // trend consumer. Absent/null on non-trend paths (run/ingest/promote).
   trend_signal_id?: string | null;
+  // schema_version 3 (RAZ-73, additive): present ONLY on the compiled trend event
+  // (source="trend_compiled", material_type="compiled"). manual = keyword-searched
+  // (TMDB title + opted-in BD), auto = keyword-TARGETED page feeds/scrapes.
+  keywords?: string[];
+  sources_manual?: CompiledMaterial[];
+  sources_auto?: CompiledMaterial[];
 }

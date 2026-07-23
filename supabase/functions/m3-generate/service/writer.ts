@@ -16,6 +16,20 @@ function headers(key: string, ret: "representation" | "minimal") {
 
 function buildEvidence(ev: SourceEventRecord) {
   const p = ev.payload;
+  // RAZ-73: a compiled trend brief carries its provenance per item — one evidence
+  // entry per material item. Inspiration-tier items are excluded: they were context
+  // only and must never be cited as the factual basis of the draft.
+  const items = [...(p.sources_manual ?? []), ...(p.sources_auto ?? [])];
+  if (items.length > 0) {
+    return items
+      .filter((i) => (i.tier ?? "material") !== "inspiration")
+      .map((i) => ({
+        claim: [i.title, i.summary].filter(Boolean).join(" — ").slice(0, 300),
+        url: i.url ?? null,
+        source: i.source ?? null,
+        published_at: i.published_at ?? null,
+      }));
+  }
   return [{
     claim: [p.title, p.summary].filter(Boolean).join(" — ").slice(0, 300),
     url: p.url ?? null,
@@ -27,6 +41,15 @@ function buildEvidence(ev: SourceEventRecord) {
 function buildMediaRefs(ev: SourceEventRecord) {
   const p = ev.payload;
   const refs: { url: string; source_url: string | null; kind: string }[] = [];
+  // RAZ-73: compiled brief — collect each item's image (manual first: the TMDB
+  // poster of the trend title is the natural cover).
+  const items = [...(p.sources_manual ?? []), ...(p.sources_auto ?? [])];
+  if (items.length > 0) {
+    for (const i of items) {
+      if (i.image_url) refs.push({ url: String(i.image_url), source_url: i.url ?? null, kind: "image" });
+    }
+    return refs;
+  }
   if (p.image_url) refs.push({ url: String(p.image_url), source_url: (p.url as string) ?? null, kind: "image" });
   for (const m of (p.media as unknown[] | null) ?? []) {
     if (typeof m === "string") refs.push({ url: m, source_url: (p.url as string) ?? null, kind: "media" });

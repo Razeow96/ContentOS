@@ -1,5 +1,22 @@
 // m3-generate types (RAZ-49). Shapes must match the ContentGenerated v1 contract.
 
+// RAZ-73: one item inside a compiled trend event (SourceEnriched v3,
+// material_type="compiled"). freshness is the pillar-priority signal.
+export interface CompiledItem {
+  source?: string;
+  material_type?: string;
+  kind?: string | null;
+  tier?: string;                     // "inspiration" items are style/context-only, never facts
+  freshness?: "recent" | "trend" | "hot";
+  title?: string;
+  summary?: string | null;
+  url?: string | null;
+  image_url?: string | null;
+  published_at?: string | null;
+  engagement?: Record<string, unknown> | null;
+  external_id?: string | null;
+}
+
 export interface SourceEventRecord {
   event_id: string;
   event_type: string;
@@ -22,6 +39,11 @@ export interface SourceEventRecord {
     enrichment?: Record<string, unknown> | null;
     ref_kind?: string;
     trend_signal_id?: string | null;   // RAZ-72: the originating trend (null off the trend path)
+    // RAZ-73 (SourceEnriched v3): the compiled trend brief. Present only when
+    // material_type="compiled" — manual = keyword-searched, auto = keyword-targeted.
+    keywords?: string[];
+    sources_manual?: CompiledItem[];
+    sources_auto?: CompiledItem[];
   };
   occurred_at: string;
 }

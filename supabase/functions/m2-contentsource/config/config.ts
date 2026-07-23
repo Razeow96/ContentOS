@@ -3,6 +3,26 @@ import type { MaterialSource, MaterialSubscription, MaterialJob, RefRow, Harvest
 
 const BD_BASE = "https://api.brightdata.com/datasets/v3";
 
+// RAZ-73: knobs for the trend-joined compiled pull (caps + summary trim). Data in
+// sources.json's trend_pull block; hard defaults only guard a missing block.
+export interface TrendPullConfig {
+  manual_cap: number;
+  auto_cap: number;
+  summary_max: number;
+  keyword_signal_types: string[];
+  feed_cache_ttl_min: number;
+}
+export function loadTrendPull(): TrendPullConfig {
+  const tp = (catalogJson as { trend_pull?: Partial<TrendPullConfig> }).trend_pull ?? {};
+  return {
+    manual_cap: tp.manual_cap ?? 5,
+    auto_cap: tp.auto_cap ?? 8,
+    summary_max: tp.summary_max ?? 800,
+    keyword_signal_types: tp.keyword_signal_types ?? ["search_trend"],
+    feed_cache_ttl_min: tp.feed_cache_ttl_min ?? 30,
+  };
+}
+
 // sources.json (the material catalog) sits beside index.ts and is bundled via the
 // import above. Edit that file + redeploy to change/add API & RSS sources.
 export function loadCatalog(): MaterialSource[] {

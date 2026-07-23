@@ -1,5 +1,13 @@
 {
   "_readme": "Content OS · M2 material source catalog — DATA ONLY. One object per source; add a source = add one object + redeploy, no code change. Full field reference, Bright Data mechanics and the collect-vs-discover / external_id traps are documented in readme.md — keep prose there, not here. NEVER put API keys in this file: 'auth_ref' names a Supabase secret (Bright Data uses BRIGHTDATA_API_KEY automatically). Knows nothing about pages — page wiring lives in page_material_sources / page_reference_sources / page_article_sources.",
+  "trend_pull": {
+    "_readme": "RAZ-73 · trend-joined compiled pull knobs. manual_cap/auto_cap = max items per leg in the compiled SourceEnriched; summary_max = per-item summary trim (chars). keyword_signal_types = TrendDetected signal_types whose topic IS a searchable keyword (e.g. google search_trend); title-grade signals (youtube trending_rank = a raw video title) are skipped — unjoinable, and a 50-title campaign burst burned the Yahoo feed budget (proven 2026-07-23). feed_cache_ttl_min = how long a fetched feed is reused across a campaign burst instead of re-fetched per trend. Freshness tags live per-source ('freshness' on each entry: recent|trend|hot — a capability tag: what the source's selection represents). BD AI-search joins the auto leg ONLY for pages that name prompt sources in page_source_settings.trend_bd_sources.",
+    "manual_cap": 5,
+    "auto_cap": 8,
+    "summary_max": 800,
+    "keyword_signal_types": ["search_trend"],
+    "feed_cache_ttl_min": 30
+  },
   "sources": [
     {
       "name": "tmdb_movie_list", "type": "api", "enabled": true,
@@ -23,7 +31,7 @@
     },
     {
       "name": "tmdb_search", "type": "api", "enabled": true, "search": true,
-      "material_type": "movie", "kind": "search", "tier": "material",
+      "material_type": "movie", "kind": "search", "tier": "material", "freshness": "trend",
       "url": "https://api.themoviedb.org/3/search/movie?query={query}&language={language}&include_adult=false",
       "auth_ref": "TMDB API key", "auth_mode": "bearer", "image_base": "https://image.tmdb.org/t/p/w500",
       "defaults": { "language": "zh-TW", "query": "" },
@@ -42,7 +50,7 @@
     },
     {
       "name": "article_rss", "type": "rss", "enabled": true,
-      "material_type": "article", "kind": null, "tier": "material",
+      "material_type": "article", "kind": null, "tier": "material", "freshness": "recent",
       "url": "", "auth_ref": null,
       "defaults": {}, "response_items_path": "rss.channel.item",
       "field_map": { "title": "title", "summary": "description", "url": "link", "external_id": ["guid.#text", "guid", "link"], "published_at": "pubDate", "topic_tags": "category" },
@@ -50,7 +58,7 @@
     },
     {
       "name": "article_scrape", "type": "scrape", "enabled": true,
-      "material_type": "article", "kind": null, "tier": "material",
+      "material_type": "article", "kind": null, "tier": "material", "freshness": "recent",
       "url": "", "auth_ref": null,
       "bd_zone": "mcp_unlocker",
       "defaults": {}, "response_items_path": "",
@@ -68,7 +76,7 @@
 
     {
       "name": "bd_perplexity", "type": "brightdata", "enabled": true, "search": true,
-      "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
+      "material_type": "article", "kind": "ai_answer", "tier": "inspiration", "freshness": "trend",
       "url": "", "auth_ref": null, "dataset_id": "gd_m7dhdot1vw9a7gc1n", "bd_input": "prompt",
       "bd_url": "https://www.perplexity.ai",
       "defaults": {}, "response_items_path": "",
@@ -77,7 +85,7 @@
     },
     {
       "name": "bd_chatgpt", "type": "brightdata", "enabled": true, "search": true,
-      "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
+      "material_type": "article", "kind": "ai_answer", "tier": "inspiration", "freshness": "trend",
       "url": "", "auth_ref": null, "dataset_id": "gd_m7aof0k82r803d5bjm", "bd_input": "prompt",
       "bd_url": "https://chatgpt.com/",
       "bd_params": { "web_search": true },
@@ -87,7 +95,7 @@
     },
     {
       "name": "bd_gemini", "type": "brightdata", "enabled": true, "search": true,
-      "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
+      "material_type": "article", "kind": "ai_answer", "tier": "inspiration", "freshness": "trend",
       "url": "", "auth_ref": null, "dataset_id": "gd_mbz66arm2mf9cu856y", "bd_input": "prompt",
       "bd_url": "https://gemini.google.com/",
       "defaults": {}, "response_items_path": "",
@@ -96,7 +104,7 @@
     },
     {
       "name": "bd_google_ai", "type": "brightdata", "enabled": true, "search": true,
-      "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
+      "material_type": "article", "kind": "ai_answer", "tier": "inspiration", "freshness": "trend",
       "url": "", "auth_ref": null, "dataset_id": "gd_mcswdt6z2elth3zqr2", "bd_input": "prompt",
       "bd_url": "https://google.com/aimode",
       "defaults": {}, "response_items_path": "",
@@ -105,7 +113,7 @@
     },
     {
       "name": "bd_copilot", "type": "brightdata", "enabled": true, "search": true,
-      "material_type": "article", "kind": "ai_answer", "tier": "inspiration",
+      "material_type": "article", "kind": "ai_answer", "tier": "inspiration", "freshness": "trend",
       "url": "", "auth_ref": null, "dataset_id": "gd_m7di5jy6s9geokz8w", "bd_input": "prompt",
       "bd_url": "https://copilot.microsoft.com/chats",
       "defaults": {}, "response_items_path": "",

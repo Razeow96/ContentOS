@@ -12,7 +12,8 @@ export async function writeSourceEvents(
 
   const rows = events.map((e) => ({
     event_type: "SourceEnriched",
-    schema_version: 2,   // v2 (RAZ-72): payload may carry `trend_signal_id` (additive; null off the trend path)
+    schema_version: 3,   // v2 (RAZ-72): + `trend_signal_id` · v3 (RAZ-73): + compiled trend fields
+                         // `keywords`/`sources_manual`/`sources_auto`/per-item `freshness` (all additive/optional)
     aggregate_id: e.raw_material_id,
     correlation_id: e.correlation_id,
     causation_id: e.causation_id,

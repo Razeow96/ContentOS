@@ -26,6 +26,7 @@
 import {
   loadCatalog, loadMaterialSubs, buildMaterialJobs, ingestJob, buildSearchJobs,
   loadRefRows, buildHarvestPlan, buildSearchPlan, loadArticleRows, buildArticleJobs,
+  loadTrendPull,
 } from "./config/config.ts";
 import { filterFresh } from "./config/dedup.ts";
 import { normalize, fanOut, applyStrategy } from "./service/normalize.ts";
@@ -35,7 +36,7 @@ import { pullApi, enrichWatchProviders } from "./adapters/api.ts";
 import { pullRss } from "./adapters/rss.ts";
 import { pullScrape } from "./adapters/scrape.ts";
 import { pullBrightData } from "./adapters/brightdata.ts";
-import type { MaterialJob, RawMaterial, RefRow } from "./service/types.ts";
+import type { CompiledMaterial, MaterialJob, RawMaterial, RefRow, SourceEnriched } from "./service/types.ts";
 import { withRun } from "../m0-infrastructure/observability/runlog.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -73,7 +74,7 @@ interface RunBody {
   // M2 trend consumer (dedup src_processed → search), not a mode-based call.
   type?: string;
   table?: string;
-  record?: { event_id: string; payload?: { topic?: string; page?: string; correlation_id?: string; trend_signal_id?: string } };
+  record?: { event_id: string; payload?: { topic?: string; page?: string; correlation_id?: string; trend_signal_id?: string; signal_type?: string } };
 }
 
 interface Summary {
@@ -544,8 +545,200 @@ async function harvestIngest(req: Request, u: URL, rl: { action?: string; status
   return resp({ ok: true, source: body.source, items: items.length, ingest: result }, 200);
 }
 
+// ── RAZ-73 · trend-joined compiled pull ─────────────────────────────────────────
+// One trend keyword → pull BOTH legs → ONE compiled SourceEnriched:
+//   manual = free keyword-search sources (tmdb_search today; adding a `search:true`
+//            non-BD catalog entry auto-joins) — what a human would search for the trend.
+//   auto   = the page's OWN article feeds/scrapes (page_article_sources), keyword-
+//            TARGETED (title/summary/tags must match the trend keyword), plus BD
+//            AI-search (sync prompt family) ONLY for pages opted in via
+//            page_source_settings.trend_bd_sources (paid → opt-in by name, as ever).
+// Items are freshness-tagged from the SOURCE's capability config (recent|trend|hot),
+// deduped via source_material, capped per leg, trimmed (no raw blobs — a compiled
+// event carries many items), and emitted as ONE event under the trend's full spine.
+// BD keyword DISCOVERY stays async-only (search_plan → worker → ingest) and cannot
+// join a sync compile — deliberately out of scope here.
+
+// CJK-safe keyword match: exact substring first (Chinese trend topics), else every
+// whitespace token ≥2 chars must appear (multi-word Latin keywords). Conservative
+// on purpose — a compiled brief full of unrelated articles poisons the draft.
+function matchesKeyword(m: RawMaterial, kw: string): boolean {
+  const hay = `${m.title} ${m.summary ?? ""} ${(m.topic_tags ?? []).join(" ")}`.toLowerCase();
+  const k = kw.trim().toLowerCase();
+  if (!k) return false;
+  if (hay.includes(k)) return true;
+  const tokens = k.split(/\s+/).filter((t) => t.length >= 2);
+  return tokens.length > 1 && tokens.every((t) => hay.includes(t));
+}
+
+function toCompiled(m: RawMaterial, freshness: "recent" | "trend" | "hot", summaryMax: number): CompiledMaterial {
+  return {
+    source: m.source,
+    material_type: m.material_type,
+    kind: m.kind,
+    tier: m.tier,
+    freshness,
+    title: m.title,
+    summary: m.summary ? m.summary.slice(0, summaryMax) : null,
+    url: m.url,
+    image_url: m.image_url,
+    published_at: m.published_at,
+    engagement: m.engagement,
+    external_id: m.external_id,
+  };
+}
+
+// Feed cache (RAZ-73): a campaign burst fires one trendConsume PER trend, and each
+// re-fetched the same page feeds — 50 trends × 2 Yahoo feeds blew the host's daily
+// record budget (proven 2026-07-23). Raw feed items are cached in feed_cache for
+// trend_pull.feed_cache_ttl_min and reused across the burst. Trend-compile path
+// only — the daily run-mode pull stays direct.
+async function fetchItemsCachedFeed(job: MaterialJob, ttlMin: number): Promise<unknown[]> {
+  const cacheable = (job.source.type === "rss" || job.source.type === "scrape") && !!job.url;
+  if (!cacheable) return await fetchItems(job);
+  const h = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
+  const cutoff = new Date(Date.now() - ttlMin * 60_000).toISOString();
+  const hit = await fetch(
+    `${SUPABASE_URL}/rest/v1/feed_cache?url=eq.${encodeURIComponent(job.url)}&fetched_at=gte.${cutoff}&select=items`,
+    { headers: h },
+  );
+  if (hit.ok) {
+    const rows = (await hit.json()) as { items: unknown[] }[];
+    if (rows.length > 0 && Array.isArray(rows[0].items)) return rows[0].items;
+  }
+  const items = await fetchItems(job);
+  // Upsert best-effort: a cache write failure must never fail the pull.
+  await fetch(`${SUPABASE_URL}/rest/v1/feed_cache?on_conflict=url`, {
+    method: "POST",
+    headers: { ...h, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({ url: job.url, fetched_at: new Date().toISOString(), items }),
+  }).catch(() => {});
+  return items;
+}
+
+// Cap-aware freshness claim: filterFresh CLAIMS a dedup key for every fresh item,
+// so claim-then-slice burns keys for items the cap then discards — they'd read as
+// stale tomorrow without ever being used. Claim one at a time and stop at the cap.
+async function filterFreshUpTo(materials: RawMaterial[], cap: number): Promise<RawMaterial[]> {
+  const out: RawMaterial[] = [];
+  for (const m of materials) {
+    if (out.length >= cap) break;
+    const fresh = await filterFresh([m], SUPABASE_URL, SERVICE_KEY);
+    if (fresh.length > 0) out.push(fresh[0]);
+  }
+  return out;
+}
+
+// page_source_settings.trend_bd_sources — BD prompt sources this page allows on the
+// trend pull. Missing column / null / [] = none (fail-safe: no silent spend).
+async function loadTrendBdSources(page: string): Promise<string[]> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/page_source_settings?page_id=eq.${encodeURIComponent(page)}&select=trend_bd_sources`,
+    { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
+  );
+  if (!res.ok) return [];
+  const rows = (await res.json()) as { trend_bd_sources?: string[] | null }[];
+  return rows[0]?.trend_bd_sources ?? [];
+}
+
+async function runTrendCompile(
+  keyword: string,
+  page: string,
+  trend: Record<string, unknown>,
+  sum: Summary,
+): Promise<{ outcome: string; manual: number; auto: number; written: number }> {
+  const catalog = loadCatalog();
+  const tp = loadTrendPull();
+  const freshnessOf = (srcName: string): "recent" | "trend" | "hot" =>
+    catalog.find((s) => s.name === srcName)?.freshness ?? "recent";
+
+  // MANUAL leg: free in-function keyword-search sources (BD excluded by default in
+  // buildSearchJobs — paid stays opt-in).
+  const manualJobs = buildSearchJobs(catalog, keyword, undefined, [page], trend);
+
+  // AUTO leg: THIS page's article feeds/scrapes + opted-in BD AI-search.
+  const artRows = (await loadArticleRows(SUPABASE_URL, SERVICE_KEY)).filter((r) => r.page_id === page);
+  const autoJobs: MaterialJob[] = buildArticleJobs(catalog, artRows, trend);
+  const bdNames = await loadTrendBdSources(page);
+  if (bdNames.length > 0) {
+    // Only the sync-capable prompt family may join a sync compile.
+    autoJobs.push(
+      ...buildSearchJobs(catalog, keyword, bdNames, [page], trend)
+        .filter((j) => j.source.type === "brightdata" && j.source.bd_input === "prompt"),
+    );
+  }
+  sum.jobs = manualJobs.length + autoJobs.length;
+
+  const pullLeg = async (jobs: MaterialJob[], keywordFilter: boolean): Promise<RawMaterial[]> => {
+    const out: RawMaterial[] = [];
+    for (const job of jobs) {
+      try {
+        const raw = normalize(job, await fetchItemsCachedFeed(job, tp.feed_cache_ttl_min));
+        sum.sources.add(job.source.name);
+        // Feeds are untargeted (today's news) — the JOIN on the trend keyword happens
+        // here. Search-shaped jobs (tmdb/BD prompt) are already keyword-targeted.
+        out.push(...(keywordFilter && job.source.type !== "brightdata" ? raw.filter((m) => matchesKeyword(m, keyword)) : raw));
+      } catch (e) {
+        sum.errors.push(`${job.source.name}${job.url ? ` (${job.url})` : ""}: ${(e as Error).message}`);
+      }
+    }
+    return out;
+  };
+
+  const manualRaw = await pullLeg(manualJobs, false);
+  const autoRaw = await pullLeg(autoJobs, true);
+  sum.pulled = manualRaw.length + autoRaw.length;
+
+  // Dedup via source_material as on every path (an article used in a compiled brief
+  // today should not ALSO be emitted by today's untargeted feed run, and vice versa).
+  // Cap-aware: stop claiming keys once the leg's cap is filled.
+  const manual = await filterFreshUpTo(manualRaw, tp.manual_cap);
+  const auto = await filterFreshUpTo(autoRaw, tp.auto_cap);
+  sum.selected = manual.length + auto.length;
+  sum.fresh = sum.selected;
+
+  if (manual.length + auto.length === 0) {
+    return { outcome: "no_material", manual: 0, auto: 0, written: 0 };
+  }
+
+  const correlation_id = (trend.correlation_id as string | undefined) ?? crypto.randomUUID();
+  const compiled: SourceEnriched = {
+    raw_material_id: crypto.randomUUID(),
+    source: "trend_compiled",
+    material_type: "compiled",
+    kind: null,
+    tier: "material",              // compiled brief is material — M3 must not skip it
+    title: keyword,
+    summary: null,
+    entities: null,
+    image_url: manual.find((m) => m.image_url)?.image_url ?? auto.find((m) => m.image_url)?.image_url ?? null,
+    media: null,
+    url: null,
+    lang: null,
+    region: null,
+    country: null,
+    topic_tags: null,
+    published_at: null,
+    engagement: null,
+    enrichment: null,
+    external_id: null,             // dedup already ran per underlying item
+    raw: null,                     // per-item raw deliberately dropped (size)
+    keywords: [keyword],
+    sources_manual: manual.map((m) => toCompiled(m, freshnessOf(m.source), tp.summary_max)),
+    sources_auto: auto.map((m) => toCompiled(m, freshnessOf(m.source), tp.summary_max)),
+    page,
+    event_type: "SourceEnriched",
+    correlation_id,
+    causation_id: (trend.event_id as string | undefined) ?? null,
+    trend_signal_id: (trend.trend_signal_id as string | undefined) ?? null,
+  };
+  sum.written = await writeSourceEvents([compiled], SUPABASE_URL, SERVICE_KEY);
+  return { outcome: "compiled", manual: manual.length, auto: auto.length, written: sum.written };
+}
+
 // RAZ-66 · M2 trend consumer (trend_events DB webhook). Dedup on src_processed →
-// keyword search (sink=events), carrying the trend's correlation + causation lineage.
+// RAZ-73: trend-joined compiled pull (was: thin keyword search), carrying the
+// trend's full spine (correlation + causation + trend_signal_id).
 async function trendConsume(body: RunBody, rl: { action?: string; status?: string; correlation_id?: string | null; summary?: unknown }) {
   const rec = body.record!;
   const p = rec.payload ?? {};
@@ -554,6 +747,20 @@ async function trendConsume(body: RunBody, rl: { action?: string; status?: strin
     rl.status = "skip";
     return resp({ ok: true, event_id: rec.event_id, outcome: "skip", reason: "event missing payload.topic/page" }, 200);
   }
+  // RAZ-73: only KEYWORD-grade signals compile. A title-grade topic (e.g. youtube
+  // trending_rank = a raw video title) is unjoinable as a search keyword — 50 of
+  // them in one campaign burned the feed budget for zero material (2026-07-23).
+  // Which signal_types are keyword-grade is config (trend_pull.keyword_signal_types).
+  // Deterministic skip → no seen-log claim needed; redelivery re-skips for free.
+  if (!loadTrendPull().keyword_signal_types.includes(String(p.signal_type ?? ""))) {
+    rl.action = "skip_title_grade";
+    rl.status = "skip";
+    rl.correlation_id = p.correlation_id ?? null;
+    return resp({
+      ok: true, event_id: rec.event_id, outcome: "skip",
+      reason: `signal_type ${p.signal_type ?? "(none)"} is not keyword-grade (trend_pull.keyword_signal_types)`,
+    }, 200);
+  }
   const first = await claimFirstDelivery("src_processed", rec.event_id);
   if (!first) {
     rl.action = "duplicate_skipped";
@@ -561,21 +768,29 @@ async function trendConsume(body: RunBody, rl: { action?: string; status?: strin
     rl.correlation_id = p.correlation_id ?? null;
     return resp({ ok: true, event_id: rec.event_id, outcome: "duplicate_skipped" }, 200);
   }
-  const searchBody: RunBody = {
-    mode: "search",
+  // RAZ-72 spine + RAZ-73 compile: correlation from the trend, causation = the
+  // TrendDetected event, trend_signal_id = the campaign.
+  const sum = newSummary();
+  const trend = { correlation_id: p.correlation_id, event_id: rec.event_id, trend_signal_id: p.trend_signal_id };
+  const compileResult = await runTrendCompile(p.topic, p.page, trend, sum);
+  const result = {
+    ok: sum.errors.length === 0,
+    outcome: compileResult.outcome,
     keyword: p.topic,
-    sink: "events",
-    pages: [p.page],
-    // RAZ-72: thread the trend's signal id onto the compiled source events so a
-    // draft traces back to the campaign that produced it.
-    trend: { correlation_id: p.correlation_id, event_id: rec.event_id, trend_signal_id: p.trend_signal_id },
+    page: p.page,
+    jobs: sum.jobs,
+    sources: [...sum.sources],
+    material_pulled: sum.pulled,
+    manual: compileResult.manual,
+    auto: compileResult.auto,
+    written: compileResult.written,
+    errors: sum.errors,
   };
-  const result = await run(searchBody);
   rl.action = "trend_consume";
   rl.correlation_id = p.correlation_id ?? null;
   rl.summary = result;
-  rl.status = (result as { ok?: boolean }).ok ? "ok" : "error";
-  return resp({ ok: true, event_id: rec.event_id, outcome: "enriched", enrich: result }, 200);
+  rl.status = result.ok ? "ok" : "error";
+  return resp({ ok: true, event_id: rec.event_id, outcome: compileResult.outcome, enrich: result }, 200);
 }
 
 Deno.serve((req) => {

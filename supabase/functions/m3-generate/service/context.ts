@@ -206,7 +206,27 @@ or {
 
 ${never}`;
 
-  const user = `MATERIAL (SourceEnriched payload — the only source of facts):
+  // RAZ-73: a compiled trend brief (SourceEnriched v3, material_type="compiled")
+  // carries MANY items in sources_manual/sources_auto instead of one material.
+  // Freshness tags are the pillar-priority signal; inspiration-tier items steer
+  // style/context but may never supply facts.
+  const compiledItems = (payload.sources_manual?.length ?? 0) + (payload.sources_auto?.length ?? 0);
+  const user = compiledItems > 0
+    ? `MATERIAL — COMPILED TREND BRIEF (the only source of facts):
+Trend keyword: ${JSON.stringify(payload.keywords ?? [payload.title])}
+
+Each item carries a freshness tag — use it as a PRIORITY signal when choosing the pillar:
+"hot" (engagement-ranked) and "trend" (tied to the trending keyword) favor timely/buzz pillars; "recent" (newly published) fits reflective pillars too.
+Items with tier="inspiration" (e.g. AI-search answers) are style/context ONLY — never take facts (names, dates, numbers, quotes) from them.
+
+## Keyword-searched material (manual)
+${JSON.stringify(payload.sources_manual ?? [], null, 2)}
+
+## Keyword-targeted page sources (auto)
+${JSON.stringify(payload.sources_auto ?? [], null, 2)}
+
+Decide: does this trend, with this material, earn a post from one of the subscribed pillars? Anchor the post on the trend keyword; ground every fact in the material items (their evidence urls). If the material is too thin for hard facts, skip with a reason.`
+    : `MATERIAL (SourceEnriched payload — the only source of facts):
 ${JSON.stringify({
     source: payload.source, material_type: payload.material_type,
     title: payload.title, summary: payload.summary, url: payload.url,
